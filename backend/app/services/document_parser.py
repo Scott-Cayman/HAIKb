@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import shutil
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Dict
+
+import fitz
+
+from app.config import settings
+from app.models.file import File
+
+
+SUPPORTED_PARSE_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx"}
+UNSUPPORTED_PARSE_EXTS = {".xls", ".xlsx", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+class UnsupportedDocumentError(RuntimeError):
+    pass
+
+
+class DocumentParserService:
+    """只抽取文件前 10 页，不允许走全文 RAG。"""
+
+    def extract_first_pages_text(self, file: File, max_pages: int = 10) -> Dict[str, object]:
+        ext = (file.file_ext or "").lower()
+        if ext in UNSUPPORTED_PARSE_EXTS:
+            raise UnsupportedDocumentError(f"当前格式暂不支持总结解析: {ext}")
+        if ext not in SUPPORTED_PARSE_EXTS:
+            raise UnsupportedDocumentError(f"当前格式暂不支持总结解析: {ext or 'unknown'}")
+
+        pdf_path = self.ensure_pdf_available(file)
+        doc = fitz.open(pdf_path)
+        page_count = len(doc)
+        pages_to_parse = min(max_pages, page_count)
+
+        texts = []
+        for index in range(pages_to_parse):
+            page_text = doc[index].get_text("text").strip()
+            texts.append(f"\n\n--- PAGE {index + 1} ---\n{page_text}")
+
+        combined_text = "\n".join(texts).strip()
+        confidence = "high" if combined_text else "low"
+        return {
+            "text": combined_text,
+            "page_count": page_count,
+            "parsed_pages": pages_to_parse,
+            "parse_confidence": confidence,
+            "pdf_path": str(pdf_path),
+        }
+
+    def ensure_pdf_available(self, file: File) -> Path:
+        preview_path = Path(file.preview_path) if file.preview_path else None
+        if preview_path and preview_path.exists() and preview_path.suffix.lower() == ".pdf":
+            return preview_path
+
+        storage_path = Path(file.storage_path)
+        if storage_path.suffix.lower() == ".pdf":
+            return storage_path
+
+        if storage_path.suffix.lower() not in {".doc", ".docx", ".ppt", ".pptx"}:
+            raise UnsupportedDocumentError(f"当前格式无法转换为 PDF: {storage_path.suffix.lower()}")
+
+        output_dir = Path(settings.PREVIEW_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        temp_input = output_dir / f"{uuid.uuid4()}{storage_path.suffix.lower()}"
+        shutil.copyfile(storage_path, temp_input)
+        try:
+            converted = self._office_to_pdf(temp_input, output_dir)
+        finally:
+            if temp_input.exists():
+                temp_input.unlink()
+        return converted
+
+    def _office_to_pdf(self, input_path: Path, output_dir: Path) -> Path:
+        soffice_cmd = shutil.which("soffice") or shutil.which("libreoffice")
+        if not soffice_cmd:
+            raise RuntimeError("LibreOffice 未安装或未加入 PATH，无法进行 Office→PDF 转换。")
+
+        cmd = [
+            soffice_cmd,
+            "--headless",
+            "--nologo",
+            "--nofirststartwizard",
+            "--norestore",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(output_dir),
+            str(input_path),
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
+        if result.returncode != 0:
+            raise RuntimeError(f"LibreOffice conversion failed: {result.stderr}")
+
+        output_file = output_dir / f"{input_path.stem}.pdf"
+        if not output_file.exists():
+            raise RuntimeError("PDF file was not created after conversion")
+        return output_file
+
+
+document_parser_service = DocumentParserService()
