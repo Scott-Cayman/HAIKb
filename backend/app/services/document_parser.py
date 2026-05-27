@@ -12,8 +12,9 @@ from app.config import settings
 from app.models.file import File
 
 
-SUPPORTED_PARSE_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx"}
-UNSUPPORTED_PARSE_EXTS = {".xls", ".xlsx", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+SUPPORTED_PARSE_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"}
+SUPPORTED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+UNSUPPORTED_PARSE_EXTS = set()
 
 
 class UnsupportedDocumentError(RuntimeError):
@@ -21,12 +22,16 @@ class UnsupportedDocumentError(RuntimeError):
 
 
 class DocumentParserService:
-    """只抽取文件前 10 页，不允许走全文 RAG。"""
+    """只抽取文件前 10 页，不允许走全文 RAG。图片文件返回图片路径供视觉模型使用。"""
 
     def extract_first_pages_text(self, file: File, max_pages: int = 10) -> Dict[str, object]:
         ext = (file.file_ext or "").lower()
-        if ext in UNSUPPORTED_PARSE_EXTS:
-            raise UnsupportedDocumentError(f"当前格式暂不支持总结解析: {ext}")
+        
+        # 如果是图片文件，直接返回图片路径
+        if ext in SUPPORTED_IMAGE_EXTS:
+            return self._parse_image_file(file)
+        
+        # 否则处理文档文件
         if ext not in SUPPORTED_PARSE_EXTS:
             raise UnsupportedDocumentError(f"当前格式暂不支持总结解析: {ext or 'unknown'}")
 
@@ -50,6 +55,25 @@ class DocumentParserService:
             "pdf_path": str(pdf_path),
         }
 
+    def _parse_image_file(self, file: File) -> Dict[str, object]:
+        """处理图片文件，返回图片路径供视觉模型使用。"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        image_path = Path(file.storage_path)
+        if not image_path.exists():
+            raise FileNotFoundError(f"图片文件不存在: {image_path}")
+        
+        logger.info(f"[DocumentParser] 处理图片文件: {file.original_name}, path={image_path}")
+        
+        return {
+            "text": "",
+            "page_count": 1,
+            "parsed_pages": 1,
+            "parse_confidence": "low",
+            "image_path": str(image_path),
+        }
+
     def ensure_pdf_available(self, file: File) -> Path:
         preview_path = Path(file.preview_path) if file.preview_path else None
         if preview_path and preview_path.exists() and preview_path.suffix.lower() == ".pdf":
@@ -59,7 +83,7 @@ class DocumentParserService:
         if storage_path.suffix.lower() == ".pdf":
             return storage_path
 
-        if storage_path.suffix.lower() not in {".doc", ".docx", ".ppt", ".pptx"}:
+        if storage_path.suffix.lower() not in {".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"}:
             raise UnsupportedDocumentError(f"当前格式无法转换为 PDF: {storage_path.suffix.lower()}")
 
         output_dir = Path(settings.PREVIEW_DIR)

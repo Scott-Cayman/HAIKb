@@ -41,6 +41,14 @@ class FolderResponse(BaseModel):
         from_attributes = True
 
 
+class FolderSummaryResponse(BaseModel):
+    folder_id: int
+    summary_status: str
+    summary_error: Optional[str] = None
+    summary: Optional[str] = None
+    summary_file_path: Optional[str] = None
+
+
 def _collect_descendant_folder_ids(db: Session, root_folder_id: int) -> List[int]:
     collected: List[int] = []
     visited: Set[int] = set()
@@ -112,6 +120,29 @@ def get_folder(folder_id: int, db: Session = Depends(get_db), current_user: User
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     return folder
+
+
+@router.get("/{folder_id}/summary", response_model=FolderSummaryResponse)
+def get_folder_summary(folder_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+
+    summary = (
+        db.query(FolderSummary)
+        .filter(FolderSummary.folder_id == folder_id, FolderSummary.is_deleted == False)
+        .first()
+    )
+    if not summary:
+        return FolderSummaryResponse(folder_id=folder_id, summary_status="pending")
+
+    return FolderSummaryResponse(
+        folder_id=folder_id,
+        summary_status=summary.summary_status,
+        summary_error=summary.summary_error,
+        summary=summary.summary_markdown,
+        summary_file_path=summary.summary_file_path,
+    )
 
 
 @router.patch("/{folder_id}", response_model=FolderResponse)

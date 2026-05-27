@@ -5,8 +5,8 @@ from app.rag.base_index import BaseIndex
 from app.rag.doc_store import SummaryDocStore
 from app.rag.keyword_store import KeywordStore
 from app.rag.pipelines import SummaryIndexingPipeline
-from app.rag.retriever import SummaryRetrievalPipeline
-from app.rag.vector_store import VectorStoreAdapter
+from app.rag.retriever_optimized import OptimizedSummaryRetrievalPipeline
+from app.rag.vector_store_optimized import VectorStoreAdapter
 
 
 class SummaryFileIndex(BaseIndex):
@@ -32,7 +32,7 @@ class SummaryFileIndex(BaseIndex):
         )
 
     def get_retriever_pipeline(self, settings: dict, user_id=None):
-        return SummaryRetrievalPipeline(
+        return OptimizedSummaryRetrievalPipeline(
             index_id=self.id,
             vector_store=self.vector_store,
             doc_store=self.doc_store,

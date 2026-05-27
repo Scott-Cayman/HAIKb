@@ -1,4 +1,4 @@
-import api from './api';
+import api, { LONG_TIMEOUT } from './api';
 
 export interface DocumentSummaryData {
   id: number;
@@ -26,6 +26,25 @@ export interface FileSummaryResponse {
   summary_status: string;
   summary_error?: string | null;
   summary?: DocumentSummaryData | null;
+}
+
+export interface BatchSummaryTaskResponse {
+  task_id: string;
+  status: string;
+  message?: string | null;
+  total_count: number;
+  completed_count: number;
+  success_count: number;
+  failed_count: number;
+  processing_count: number;
+  pending_count: number;
+  processing_file_id?: number | null;
+  elapsed_seconds: number;
+  timeout_seconds: number;
+  retry_attempts: Record<string, number>;
+  failed_file_ids: number[];
+  success_file_ids: number[];
+  last_error_by_file: Record<string, string>;
 }
 
 export interface RagIndexItem {
@@ -64,7 +83,21 @@ export const ragApi = {
     return response.data;
   },
   summarizeFile: async (fileId: number) => {
-    const response = await api.post(`/rag/files/${fileId}/summarize`);
+    const response = await api.post(`/rag/files/${fileId}/summarize`, {}, {
+      timeout: LONG_TIMEOUT
+    });
+    return response.data;
+  },
+  batchSummarizeFiles: async (fileIds: number[]) => {
+    const response = await api.post<BatchSummaryTaskResponse>('/rag/files/batch-summarize', {
+      file_ids: fileIds,
+    }, {
+      timeout: LONG_TIMEOUT
+    });
+    return response.data;
+  },
+  getBatchSummaryTask: async (taskId: string) => {
+    const response = await api.get<BatchSummaryTaskResponse>(`/rag/batch-tasks/${taskId}`);
     return response.data;
   },
   getFileSummary: async (fileId: number) => {
@@ -76,7 +109,9 @@ export const ragApi = {
     return response.data;
   },
   reindexSummary: async (fileId: number) => {
-    const response = await api.post(`/rag/files/${fileId}/reindex-summary`);
+    const response = await api.post(`/rag/files/${fileId}/reindex-summary`, {}, {
+      timeout: LONG_TIMEOUT
+    });
     return response.data;
   },
   getStatus: async () => {

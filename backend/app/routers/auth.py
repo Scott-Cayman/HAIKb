@@ -236,6 +236,23 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
         user = db.query(User).filter(or_(*conditions)).first()
 
         now = datetime.now(timezone.utc)
+        
+        # 检查是否是超级管理员
+        super_admin_emails = [
+            item.strip().lower()
+            for item in (settings.SUPER_ADMIN_EMAILS or "").split(",")
+            if item.strip()
+        ]
+        is_super_admin = final_email in super_admin_emails
+        
+        # 检查是否是普通管理员
+        admin_emails = [
+            item.strip().lower()
+            for item in (settings.ADMIN_EMAILS or "").split(",")
+            if item.strip()
+        ]
+        is_admin = is_super_admin or final_email in admin_emails
+        
         if not user:
             user = User(
                 name=nick or final_email,
@@ -249,6 +266,8 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
                 department_name=dept_name,
                 last_login_at=now,
                 is_active=True,
+                is_super_admin=is_super_admin,
+                is_admin=is_admin,
             )
             db.add(user)
             db.commit()
@@ -264,6 +283,13 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
             user.department_id = dept_id or user.department_id
             user.department_name = dept_name or user.department_name
             user.last_login_at = now
+            # 如果是超级管理员邮箱，自动提升权限
+            if is_super_admin:
+                user.is_super_admin = True
+                user.is_admin = True
+            elif is_admin:
+                # 如果是普通管理员但不是超级管理员，只设置 is_admin
+                user.is_admin = True
             db.commit()
             db.refresh(user)
 

@@ -40,7 +40,10 @@ class KeywordStore:
             hits = Counter(keyword for keyword in keywords if keyword in content)
             if not hits:
                 continue
-            metadata = json.loads(chunk.metadata_json) if chunk.metadata_json else {}
+            try:
+                metadata = json.loads(chunk.metadata_json) if chunk.metadata_json else {}
+            except json.JSONDecodeError:
+                metadata = {}
             score = sum(hits.values()) / max(len(keywords), 1)
             results.append(
                 {

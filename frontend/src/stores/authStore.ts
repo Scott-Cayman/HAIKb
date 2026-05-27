@@ -20,13 +20,15 @@ interface AuthState {
   login: (token: string, user: User) => void;
   logout: () => void;
   checkAuth: () => Promise<void>;
+  _checkAuthPromise: Promise<void> | null;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   token: localStorage.getItem('token'),
   isLoading: true,
   isAuthenticated: !!localStorage.getItem('token'),
+  _checkAuthPromise: null,
 
   login: (token: string, user: User) => {
     localStorage.setItem('token', token);
@@ -35,22 +37,32 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     localStorage.removeItem('token');
-    set({ token: null, user: null, isAuthenticated: false });
+    set({ token: null, user: null, isAuthenticated: false, _checkAuthPromise: null });
   },
 
   checkAuth: async () => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      set({ isLoading: false, isAuthenticated: false });
-      return;
+    const existingPromise = get()._checkAuthPromise;
+    if (existingPromise) {
+      return existingPromise;
     }
 
-    try {
-      const response = await api.get('/auth/me');
-      set({ user: response.data, isAuthenticated: true, isLoading: false });
-    } catch (error) {
-      localStorage.removeItem('token');
-      set({ user: null, token: null, isAuthenticated: false, isLoading: false });
-    }
+    const promise = (async () => {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        set({ isLoading: false, isAuthenticated: false, _checkAuthPromise: null });
+        return;
+      }
+
+      try {
+        const response = await api.get('/auth/me');
+        set({ user: response.data, isAuthenticated: true, isLoading: false, _checkAuthPromise: null });
+      } catch (error) {
+        localStorage.removeItem('token');
+        set({ user: null, token: null, isAuthenticated: false, isLoading: false, _checkAuthPromise: null });
+      }
+    })();
+
+    set({ _checkAuthPromise: promise });
+    return promise;
   },
 }));

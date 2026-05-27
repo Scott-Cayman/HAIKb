@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Folder, File, MoreVertical, LayoutGrid, List, Plus, PencilLine, Trash2, X } from 'lucide-react';
 import api from '../services/api';
@@ -34,6 +34,15 @@ const Home = () => {
   const [renameValue, setRenameValue] = useState('');
   const [deleteFolder, setDeleteFolder] = useState<FolderType | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [folderSortConfig, setFolderSortConfig] = useState<{ key: 'name' | 'description'; direction: 'asc' | 'desc' }>({
+    key: 'name',
+    direction: 'asc'
+  });
+  const [filesSortConfig, setFilesSortConfig] = useState<{ key: 'original_name' | 'size' | 'created_at'; direction: 'asc' | 'desc' }>({
+    key: 'original_name',
+    direction: 'asc'
+  });
+  const fetchPromiseRef = useRef<Promise<void> | null>(null);
 
   const fetchFolders = async () => {
     try {
@@ -54,8 +63,11 @@ const Home = () => {
   };
 
   useEffect(() => {
-    fetchFolders();
-    fetchRecentFiles();
+    if (!fetchPromiseRef.current) {
+      fetchPromiseRef.current = (async () => {
+        await Promise.all([fetchFolders(), fetchRecentFiles()]);
+      })();
+    }
   }, []);
 
   useEffect(() => {
@@ -102,6 +114,48 @@ const Home = () => {
     }
   };
 
+  const handleFolderSort = (key: 'name' | 'description') => {
+    setFolderSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const handleFilesSort = (key: 'original_name' | 'size' | 'created_at') => {
+    setFilesSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+  const sortedFolders = [...folders].sort((a, b) => {
+    let comparison: number;
+    
+    if (folderSortConfig.key === 'name') {
+      comparison = naturalCollator.compare(a.name, b.name);
+    } else {
+      comparison = naturalCollator.compare(a.description || '', b.description || '');
+    }
+    
+    return folderSortConfig.direction === 'asc' ? comparison : -comparison;
+  });
+
+  const sortedRecentFiles = [...recentFiles].sort((a, b) => {
+    let comparison: number;
+    
+    if (filesSortConfig.key === 'original_name') {
+      comparison = naturalCollator.compare(a.original_name, b.original_name);
+    } else if (filesSortConfig.key === 'size') {
+      comparison = a.size - b.size;
+    } else {
+      comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    }
+    
+    return filesSortConfig.direction === 'asc' ? comparison : -comparison;
+  });
+
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolderName.trim()) return;
@@ -145,7 +199,7 @@ const Home = () => {
 
       {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {folders.map(folder => (
+          {sortedFolders.map(folder => (
             <div 
               key={folder.id}
               onClick={() => navigate(`/folders/${folder.id}`)}
@@ -291,70 +345,76 @@ const Home = () => {
           ) : null}
           {folders.length ? (
             <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50/50 border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400 font-semibold">
-                  <th className="p-4 font-medium">名称</th>
-                  <th className="p-4 font-medium hidden md:table-cell">描述</th>
-                  <th className="p-4"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 text-sm">
-                {folders.map((folder) => (
-                  <tr key={folder.id} onClick={() => navigate(`/folders/${folder.id}`)} className="hover:bg-slate-50/50 transition-colors group cursor-pointer">
-                    <td className="p-4">
-                      <div className="flex items-center">
-                        <Folder className="w-5 h-5 text-blue-500 mr-3" />
-                        <span className="font-medium text-slate-700 group-hover:text-blue-600 transition-colors">{folder.name}</span>
-                      </div>
-                    </td>
-                    <td className="p-4 text-slate-500 hidden md:table-cell">{folder.description || '无描述'}</td>
-                    <td className="p-4 text-right">
-                      {canEdit && (
-                        <div className="relative inline-flex">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenMenuId((prev) => (prev === folder.id ? null : folder.id));
-                            }}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-100 transition-colors opacity-0 group-hover:opacity-100"
-                          >
-                            <MoreVertical className="w-5 h-5" />
-                          </button>
-                          {openMenuId === folder.id ? (
-                            <div
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                              className="absolute right-0 mt-2 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => openRename(folder)}
-                                className="w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                              >
-                                <PencilLine className="w-4 h-4 text-slate-500" />
-                                重命名
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpenMenuId(null);
-                                  setDeleteFolder(folder);
-                                }}
-                                className="w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                                删除
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                      )}
-                    </td>
+                <thead>
+                  <tr className="bg-slate-50/50 border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400 font-semibold">
+                    <th className="p-4 font-medium cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFolderSort('name')}>
+                      名称 {folderSortConfig.key === 'name' && (folderSortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
+                    <th className="p-4 font-medium hidden md:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFolderSort('description')}>
+                      描述 {folderSortConfig.key === 'description' && (folderSortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
+                    <th className="p-4"></th>
                   </tr>
-                ))}
-              </tbody>
+                </thead>
+                <tbody className="divide-y divide-slate-50 text-sm">
+                  {sortedFolders.map((folder, idx) => {
+                      const isLastItem = idx === sortedFolders.length - 1;
+                    return (
+                    <tr key={folder.id} onClick={() => navigate(`/folders/${folder.id}`)} className="hover:bg-slate-50/50 transition-colors group cursor-pointer">
+                      <td className="p-4">
+                        <div className="flex items-center">
+                          <Folder className="w-5 h-5 text-blue-500 mr-3" />
+                          <span className="font-medium text-slate-700 group-hover:text-blue-600 transition-colors">{folder.name}</span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-slate-500 hidden md:table-cell">{folder.description || '无描述'}</td>
+                      <td className="p-4 text-right">
+                        {canEdit && (
+                          <div className="relative inline-flex">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenMenuId((prev) => (prev === folder.id ? null : folder.id));
+                              }}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-100 transition-colors opacity-0 group-hover:opacity-100"
+                            >
+                              <MoreVertical className="w-5 h-5" />
+                            </button>
+                            {openMenuId === folder.id ? (
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                className={`absolute right-0 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20 ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => openRename(folder)}
+                                  className="w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                                >
+                                  <PencilLine className="w-4 h-4 text-slate-500" />
+                                  重命名
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenMenuId(null);
+                                    setDeleteFolder(folder);
+                                  }}
+                                  className="w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                  删除
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );})}
+                </tbody>
             </table>
           ) : (
             <div className="p-8 text-center text-slate-500">暂无文件夹</div>
@@ -369,15 +429,21 @@ const Home = () => {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/50 border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400 font-semibold">
-                  <th className="p-4 font-medium">名称</th>
+                  <th className="p-4 font-medium cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFilesSort('original_name')}>
+                    名称 {filesSortConfig.key === 'original_name' && (filesSortConfig.direction === 'asc' ? '↑' : '↓')}
+                  </th>
                   <th className="p-4 font-medium">所属文件夹</th>
-                  <th className="p-4 font-medium hidden sm:table-cell">大小</th>
-                  <th className="p-4 font-medium hidden md:table-cell">更新时间</th>
+                  <th className="p-4 font-medium hidden sm:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFilesSort('size')}>
+                    大小 {filesSortConfig.key === 'size' && (filesSortConfig.direction === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th className="p-4 font-medium hidden md:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFilesSort('created_at')}>
+                    更新时间 {filesSortConfig.key === 'created_at' && (filesSortConfig.direction === 'asc' ? '↑' : '↓')}
+                  </th>
                   <th className="p-4"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-sm">
-                {recentFiles.map(file => (
+                {sortedRecentFiles.map(file => (
                   <tr key={file.id} onClick={() => navigate(`/files/${file.id}`)} className="hover:bg-slate-50/50 transition-colors group cursor-pointer">
                     <td className="p-4 flex items-center">
                       <File className="w-5 h-5 text-blue-500 mr-3" />

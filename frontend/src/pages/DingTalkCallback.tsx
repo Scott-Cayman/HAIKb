@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import { useAuthStore } from '../stores/authStore';
@@ -10,10 +10,11 @@ type CallbackResponse = {
 };
 
 const DingTalkCallback = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { login } = useAuthStore();
   const [error, setError] = useState<string | null>(null);
+  const isProcessing = useRef(false);
 
   const payload = useMemo(() => {
     const code = searchParams.get('authCode') || searchParams.get('code') || '';
@@ -25,6 +26,10 @@ const DingTalkCallback = () => {
     let cancelled = false;
 
     const run = async () => {
+      if (isProcessing.current) {
+        return;
+      }
+      
       if (!payload.code) {
         setError('缺少授权码');
         return;
@@ -34,15 +39,15 @@ const DingTalkCallback = () => {
         return;
       }
 
+      isProcessing.current = true;
+      
+      setSearchParams({}, { replace: true });
+
       try {
         const response = await api.post<CallbackResponse>('/auth/dingtalk/callback', payload);
         const { access_token, user } = response.data;
         login(access_token, user);
-        if (user?.is_admin || user?.is_super_admin) {
-          navigate('/admin', { replace: true });
-        } else {
-          navigate('/', { replace: true });
-        }
+        navigate('/', { replace: true });
       } catch (err: any) {
         const message = err?.response?.data?.detail || err?.message || '钉钉登录失败';
         if (!cancelled) {
@@ -56,7 +61,7 @@ const DingTalkCallback = () => {
     return () => {
       cancelled = true;
     };
-  }, [login, navigate, payload.code, payload.state]);
+  }, [login, navigate, payload.code, payload.state, setSearchParams]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">

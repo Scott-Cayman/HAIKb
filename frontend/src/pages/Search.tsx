@@ -4,12 +4,16 @@ import { Bot, ChevronRight, Download, Eye, FileText, Loader2, Search as SearchIc
 
 import { agentApi, AgentChatResponse } from '../services/agentApi';
 
+const getBackendBaseURL = () => {
+  return 'http://113.59.125.17:5181';
+};
+
 const STORAGE_KEY = 'search_page_state';
 
 const Search = () => {
   const navigate = useNavigate();
   
-  const [query, setQuery] = useState<string>('找一下我们公司关于政府类的项目');
+  const [query, setQuery] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AgentChatResponse | null>(null);
@@ -19,11 +23,16 @@ const Search = () => {
     if (savedState) {
       try {
         const { query: savedQuery, result: savedResult, error: savedError } = JSON.parse(savedState);
-        if (savedQuery) setQuery(savedQuery);
-        if (savedResult) setResult(savedResult);
-        if (savedError) setError(savedError);
+        setTimeout(() => {
+          if (savedQuery && typeof savedQuery === 'string') setQuery(savedQuery);
+          if (savedResult && typeof savedResult === 'object' && 'answer' in savedResult) {
+            setResult(savedResult);
+          }
+          if (savedError && typeof savedError === 'string') setError(savedError);
+        }, 0);
       } catch (e) {
         console.error('Failed to restore search state:', e);
+        localStorage.removeItem(STORAGE_KEY);
       }
     }
   }, []);
@@ -49,6 +58,71 @@ const Search = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const renderAnswer = () => {
+    if (!result) return null;
+    return (
+      <article className="prose prose-slate max-w-none text-sm leading-7">
+        {result.answer.split('\n').map((line, index) => (
+          <p key={index}>{line}</p>
+        ))}
+      </article>
+    );
+  };
+
+  const renderRelatedFiles = () => {
+    const validFiles = result?.related_files?.filter((file) => file.score > 0) || [];
+    if (validFiles.length === 0) {
+      return <p className="text-sm text-slate-500">暂无推荐文件。</p>;
+    }
+    return (
+      <div className="space-y-4">
+        {validFiles.map((file) => (
+          <div 
+            key={`file-${file.file_id}-${file.summary_id}`} 
+            className="border border-slate-200 rounded-2xl p-5 hover:border-blue-300 transition-colors"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 text-slate-900 font-semibold">
+                  <FileText className="w-4 h-4 text-blue-500" />
+                  <span className="truncate">{file.original_name}</span>
+                </div>
+                <p className="text-sm text-slate-600 mt-3 leading-7">{file.one_line_judgement}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-xs text-slate-400">匹配分数</div>
+                <div className="text-lg font-bold text-blue-600">{file.score.toFixed(2)}</div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3 mt-4">
+              <button
+                onClick={() => navigate(`/files/${file.file_id}`)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-colors text-sm"
+              >
+                <Eye className="w-4 h-4" />
+                预览原文件
+              </button>
+              <a
+                href={`${getBackendBaseURL()}${file.download_url}`}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors text-sm"
+              >
+                <Download className="w-4 h-4" />
+                下载原文件
+              </a>
+              <button
+                onClick={() => navigate(`/files/${file.file_id}`)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-slate-300 transition-colors text-sm"
+              >
+                查看 AI 总结
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   return (
@@ -113,7 +187,7 @@ const Search = () => {
               <span>AI 正在根据总结文档组织答案...</span>
             </div>
           ) : result ? (
-            <article className="prose prose-slate max-w-none whitespace-pre-wrap text-sm leading-7">{result.answer}</article>
+            renderAnswer()
           ) : (
             <p className="text-slate-500 text-sm">输入问题后，这里会展示匹配结论、推荐文件和注意事项。</p>
           )}
@@ -124,55 +198,7 @@ const Search = () => {
             <h2 className="text-lg font-bold text-slate-900">推荐文件</h2>
             <span className="text-xs text-slate-400">AI评分 (0.0-1.0，越接近1越相关)</span>
           </div>
-
-          <div className="space-y-4">
-            {result?.related_files?.filter((file) => file.score > 0)?.length ? (
-              result.related_files
-                .filter((file) => file.score > 0)
-                .map((file) => (
-                <div key={`${file.file_id}-${file.summary_id}`} className="border border-slate-200 rounded-2xl p-5 hover:border-blue-300 transition-colors">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 text-slate-900 font-semibold">
-                        <FileText className="w-4 h-4 text-blue-500" />
-                        <span className="truncate">{file.original_name}</span>
-                      </div>
-                      <p className="text-sm text-slate-600 mt-3 leading-7">{file.one_line_judgement}</p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-xs text-slate-400">匹配分数</div>
-                      <div className="text-lg font-bold text-blue-600">{file.score.toFixed(2)}</div>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-3 mt-4">
-                    <button
-                      onClick={() => navigate(`/files/${file.file_id}`)}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-colors text-sm"
-                    >
-                      <Eye className="w-4 h-4" />
-                      预览原文件
-                    </button>
-                    <a
-                      href={`http://localhost:8080${file.download_url}`}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors text-sm"
-                    >
-                      <Download className="w-4 h-4" />
-                      下载原文件
-                    </a>
-                    <button
-                      onClick={() => navigate(`/files/${file.file_id}`)}
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-slate-300 transition-colors text-sm"
-                    >
-                      查看 AI 总结
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-slate-500">暂无推荐文件。</p>
-            )}
-          </div>
+          {renderRelatedFiles()}
         </section>
       </div>
     </div>

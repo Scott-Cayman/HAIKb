@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { File, Clock } from 'lucide-react';
 import api from '../services/api';
@@ -15,18 +15,26 @@ interface FileType {
 const Recent = () => {
   const navigate = useNavigate();
   const [recentFiles, setRecentFiles] = useState<FileType[]>([]);
+  const [fetching, setFetching] = useState(false);
+  const fetchPromiseRef = useRef<Promise<void> | null>(null);
 
   const fetchRecentFiles = async () => {
+    if (fetching) return;
+    setFetching(true);
     try {
       const response = await api.get('/files/recent');
       setRecentFiles(response.data);
     } catch (error) {
       console.error('Failed to fetch recent files', error);
+    } finally {
+      setFetching(false);
     }
   };
 
   useEffect(() => {
-    fetchRecentFiles();
+    if (!fetchPromiseRef.current) {
+      fetchPromiseRef.current = fetchRecentFiles();
+    }
   }, []);
 
   return (

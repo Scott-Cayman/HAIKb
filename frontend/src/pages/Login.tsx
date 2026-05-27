@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import api from '../services/api';
-import { ShieldAlert, Users, KeyRound, Building } from 'lucide-react';
+import { ShieldAlert, Users, KeyRound, Cloud } from 'lucide-react';
+import dingtalkIcon from '../assets/dingtalk.png';
 
 const Login = () => {
   const navigate = useNavigate();
@@ -24,11 +25,7 @@ const Login = () => {
       const response = await api.post('/auth/login', params);
       const { access_token, user } = response.data;
       login(access_token, user);
-      if (user.is_admin || user.is_super_admin) {
-        navigate('/admin');
-      } else {
-        navigate('/');
-      }
+      navigate('/');
     } catch (err: any) {
       setError(err.response?.data?.detail || '登录失败，请检查账号密码');
     } finally {
@@ -71,11 +68,15 @@ const Login = () => {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
       <div className="max-w-md w-full bg-white rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] overflow-hidden border border-slate-100">
         <div className="px-8 pt-12 pb-8 text-center">
-          <div className="w-16 h-16 bg-blue-600 rounded-2xl mx-auto flex items-center justify-center mb-6 shadow-inner transform -rotate-6">
-            <Building className="w-8 h-8 text-white transform rotate-6" />
+          <div className="w-20 h-16 mx-auto mb-6 relative">
+            <div className="absolute top-0 left-0 w-12 h-12 bg-blue-400 rounded-full shadow-lg"></div>
+            <div className="absolute top-2 left-4 w-16 h-12 bg-blue-500 rounded-full shadow-lg"></div>
+            <div className="absolute top-0 left-10 w-10 h-10 bg-blue-400 rounded-full shadow-lg"></div>
+            <div className="absolute top-6 left-2 w-16 h-10 bg-blue-500 rounded-full shadow-lg"></div>
+            <Cloud className="w-10 h-10 text-white absolute top-4 left-5 z-10" />
           </div>
           <h2 className="text-2xl font-bold text-slate-900 mb-2">企业资料门户</h2>
-          <p className="text-slate-500 text-sm">统一的内部知识库与文件管理平台</p>
+          <p className="text-slate-500 text-sm">基于AI检索的内部知识库与文件管理平台</p>
         </div>
 
         <div className="px-8 pb-12 space-y-6">
@@ -90,11 +91,9 @@ const Login = () => {
             <button
               onClick={handleDingTalkLogin}
               disabled={isLoading}
-              className="w-full flex items-center justify-center px-6 py-3.5 bg-[#007FFF] text-white rounded-xl font-medium hover:bg-blue-600 focus:outline-none focus:ring-4 focus:ring-blue-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow"
+              className="w-full flex items-center justify-center px-6 py-3.5 bg-[#0089FF] text-white rounded-xl font-medium hover:bg-[#0066CC] focus:outline-none focus:ring-4 focus:ring-blue-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow"
             >
-              <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M2.26 13.56L11 21.32a1.5 1.5 0 002.13-.12l8.35-9.67a1.5 1.5 0 00-.12-2.13L12.68 1.64a1.5 1.5 0 00-2.13.12L2.14 11.43a1.5 1.5 0 00.12 2.13z"/>
-              </svg>
+              <img src={dingtalkIcon} alt="钉钉" className="w-6 h-6 mr-3" />
               钉钉一键登录
             </button>
 
@@ -136,7 +135,7 @@ const Login = () => {
                     required
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="输入 admin"
+                    placeholder=""
                     className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all text-sm"
                   />
                 </div>
@@ -147,7 +146,7 @@ const Login = () => {
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="输入 Himice2024"
+                    placeholder=""
                     className="w-full px-4 py-2.5 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all text-sm"
                   />
                 </div>

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+import json
+from typing import List
 
 from app.config import settings
 from app.database import SessionLocal
@@ -177,11 +178,11 @@ class FolderSummaryService:
 
         for fs in file_summaries:
             if fs.keyword_tags:
-                all_keywords.update([k.strip() for k in fs.keyword_tags.split(",") if k.strip()])
+                all_keywords.update(self._parse_tag_list(fs.keyword_tags))
             if fs.industry_tags:
-                all_industry_tags.update([k.strip() for k in fs.industry_tags.split(",") if k.strip()])
+                all_industry_tags.update(self._parse_tag_list(fs.industry_tags))
             if fs.region_tags:
-                all_region_tags.update([k.strip() for k in fs.region_tags.split(",") if k.strip()])
+                all_region_tags.update(self._parse_tag_list(fs.region_tags))
             if fs.client_type and fs.client_type != "未识别":
                 all_client_types.add(fs.client_type)
             if fs.project_type and fs.project_type != "未识别":
@@ -282,6 +283,17 @@ class FolderSummaryService:
         output = summary_dir / f"folder_{folder_id}.md"
         output.write_text(markdown, encoding="utf-8")
         return output
+
+    def _parse_tag_list(self, raw_value: str) -> List[str]:
+        if not raw_value:
+            return []
+        try:
+            parsed = json.loads(raw_value)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip() and str(item).strip() != "未识别"]
+        except json.JSONDecodeError:
+            pass
+        return [item.strip() for item in raw_value.split(",") if item.strip() and item.strip() != "未识别" and item.strip() != "[]"]
 
 
 folder_summary_service = FolderSummaryService()

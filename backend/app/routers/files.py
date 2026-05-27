@@ -289,7 +289,7 @@ async def upload_file(
     if ext in [".pdf", ".jpg", ".jpeg", ".png", ".webp"]:
         preview_status = "success"
         preview_path = storage_path
-    elif ext in [".doc", ".docx", ".ppt", ".pptx"]:
+    elif ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_status = "pending"
         preview_path = None
     else:
@@ -349,7 +349,7 @@ def get_file(file_id: int, background_tasks: BackgroundTasks, db: Session = Depe
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
 
-    if file.preview_status == "failed" and file.file_ext in [".doc", ".docx", ".ppt", ".pptx"]:
+    if file.preview_status in ["failed", "unsupported"] and file.file_ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.pdf")
         file.preview_status = "pending"
         db.commit()

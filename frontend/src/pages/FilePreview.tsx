@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   AlertCircle,
@@ -48,6 +48,7 @@ const parseTagTokens = (value?: string | null) => {
       return parsed.map((item) => String(item).trim()).filter(Boolean);
     }
   } catch {
+    // Ignore parsing errors
   }
   return trimmed
     .split(/[\n,，、]+/g)
@@ -88,6 +89,7 @@ const PdfViewer = ({ url }: { url: string }) => {
     setAutoFitDone(false);
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlePageOnLoadSuccess = (page: any) => {
     if (!autoFitDone && containerRef.current && page.originalWidth) {
       const containerWidth = containerRef.current.clientWidth - 48;
@@ -123,7 +125,7 @@ const PdfViewer = ({ url }: { url: string }) => {
       }
 
       await containerRef.current.requestFullscreen();
-    } catch (err) {
+    } catch {
       setIsExpanded((value) => !value);
     }
   };
@@ -264,6 +266,7 @@ const FilePreview = () => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [summaryData, setSummaryData] = useState<any>(null);
   const [summaryActionLoading, setSummaryActionLoading] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
@@ -278,57 +281,86 @@ const FilePreview = () => {
   });
   const pollAttemptsRef = useRef(0);
 
-  const fetchSummary = async () => {
+  const [pollTrigger, setPollTrigger] = useState(0);
+
+  const fetchSummary = useCallback(async () => {
     if (!id) return;
-    setSummaryLoading(true);
     try {
       const response = await ragApi.getFileSummary(Number(id));
       setSummaryData(response);
+      return response;
     } catch (err) {
       console.error('获取总结失败', err);
-    } finally {
-      setSummaryLoading(false);
     }
-  };
+  }, [id]);
 
   useEffect(() => {
     let timer: number | undefined;
+    let isMounted = true;
     pollAttemptsRef.current = 0;
 
-    const fetchFile = async () => {
-      try {
-        const response = await api.get(`/files/${id}`);
-        setFile(response.data);
+    let isFirstFetch = true;
 
-        if (response.data.preview_status === 'pending') {
+    const pollData = async () => {
+      if (isFirstFetch) {
+        setLoading(true);
+        setSummaryLoading(true);
+        isFirstFetch = false;
+      }
+      try {
+        const fileResponse = await api.get(`/files/${id}`);
+        if (!isMounted) return;
+        setFile(fileResponse.data);
+        
+        const summaryResponse = await fetchSummary();
+        if (!isMounted) return;
+        
+        const needsPreviewPoll = fileResponse.data.preview_status === 'pending';
+        const needsSummaryPoll = summaryResponse?.summary_status === 'processing' || summaryResponse?.summary_status === 'pending';
+
+        if (needsPreviewPoll) {
           pollAttemptsRef.current += 1;
           if (pollAttemptsRef.current >= 100) {
             setError('文件转换超时，请稍后重试');
             setLoading(false);
             return;
           }
-          timer = window.setTimeout(fetchFile, 3000);
-        } else if (response.data.preview_status === 'success') {
-          const blobResponse = await api.get(`/files/${id}/preview`, { responseType: 'blob' });
-          const url = window.URL.createObjectURL(new Blob([blobResponse.data]));
-          setPreviewUrl(url);
-          setLoading(false);
-        } else {
+        }
+
+        setPreviewUrl(currentPreviewUrl => {
+          if (fileResponse.data.preview_status === 'success' && !currentPreviewUrl) {
+            api.get(`/files/${id}/preview`, { responseType: 'blob' }).then(blobResponse => {
+              if (!isMounted) return;
+              const url = window.URL.createObjectURL(new Blob([blobResponse.data]));
+              setPreviewUrl(url);
+            }).catch(console.error);
+          }
+          return currentPreviewUrl;
+        });
+        
+        if (!needsPreviewPoll) {
           setLoading(false);
         }
-      } catch (err) {
+        setSummaryLoading(false);
+
+        if (needsPreviewPoll || needsSummaryPoll) {
+          timer = window.setTimeout(pollData, 3000);
+        }
+      } catch {
+        if (!isMounted) return;
         setError('获取文件信息失败');
         setLoading(false);
+        setSummaryLoading(false);
       }
     };
 
-    fetchFile();
-    fetchSummary();
+    pollData();
 
     return () => {
+      isMounted = false;
       if (timer) window.clearTimeout(timer);
     };
-  }, [id]);
+  }, [id, pollTrigger, fetchSummary]);
 
   useEffect(() => {
     return () => {
@@ -362,9 +394,10 @@ const FilePreview = () => {
       } else {
         await ragApi.reindexSummary(Number(id));
       }
-      await fetchSummary();
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || '操作失败');
+      setPollTrigger(p => p + 1);
+    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      alert((err as any)?.response?.data?.detail || '操作失败');
     } finally {
       setSummaryActionLoading(false);
     }
@@ -468,8 +501,9 @@ const FilePreview = () => {
       });
       setTagEditorOpen(false);
       await fetchSummary();
-    } catch (err: any) {
-      alert(err?.response?.data?.detail || '保存标签失败');
+    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      alert((err as any)?.response?.data?.detail || '保存标签失败');
     } finally {
       setTagSaving(false);
     }

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, File, Upload, MoreVertical, CheckCircle, XCircle, Loader2, Folder, Grid, List, FileText, Image, Film, Music, Archive, PencilLine, Trash2, X } from 'lucide-react';
 import api from '../services/api';
+import { ragApi, type BatchSummaryTaskResponse } from '../services/ragApi';
 import { formatDate, formatSize } from '../utils';
 import { useAuthStore } from '../stores/authStore';
 
@@ -33,6 +34,7 @@ interface UploadItem {
   relativePath: string;
   status: 'pending' | 'uploading' | 'success' | 'failed';
   progress: number;
+  uploadedFileId?: number;
   error?: string;
 }
 
@@ -101,9 +103,19 @@ const FolderDetail = () => {
   const [renameValue, setRenameValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<ActionTarget | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [summaryTask, setSummaryTask] = useState<BatchSummaryTaskResponse | null>(null);
+  const summaryPollTimerRef = useRef<number | null>(null);
+  const [sortConfig, setSortConfig] = useState<{ key: 'name' | 'original_name' | 'size' | 'created_at'; direction: 'asc' | 'desc' }>({
+    key: 'name',
+    direction: 'asc'
+  });
+  const [fetching, setFetching] = useState(false);
+  const fetchPromiseRef = useRef<Promise<void> | null>(null);
+  const lastFetchedIdRef = useRef<string | null>(null);
 
   const fetchFolderData = async () => {
-    if (!id) return;
+    if (!id || fetching) return;
+    setFetching(true);
     try {
       const [folderRes, subfoldersRes, filesRes] = await Promise.all([
         api.get(`/folders/${id}`),
@@ -115,11 +127,16 @@ const FolderDetail = () => {
       setFiles(filesRes.data);
     } catch (error) {
       console.error('Failed to fetch folder data', error);
+    } finally {
+      setFetching(false);
     }
   };
 
   useEffect(() => {
-    fetchFolderData();
+    if (id !== lastFetchedIdRef.current) {
+      lastFetchedIdRef.current = id ?? null;
+      fetchPromiseRef.current = fetchFolderData();
+    }
   }, [id]);
 
   useEffect(() => {
@@ -128,6 +145,14 @@ const FolderDetail = () => {
     window.addEventListener('mousedown', onMouseDown);
     return () => window.removeEventListener('mousedown', onMouseDown);
   }, [openMenuKey]);
+
+  useEffect(() => {
+    return () => {
+      if (summaryPollTimerRef.current) {
+        window.clearTimeout(summaryPollTimerRef.current);
+      }
+    };
+  }, []);
 
   const openRenameDialog = (target: ActionTarget) => {
     setOpenMenuKey(null);
@@ -211,10 +236,74 @@ const FolderDetail = () => {
     e.target.value = '';
   };
 
-  const uploadFile = async (item: UploadItem): Promise<boolean> => {
+  const pollSummaryTask = useCallback(async (taskId: string) => {
+    try {
+      const task = await ragApi.getBatchSummaryTask(taskId);
+      setSummaryTask(task);
+
+      if (task.status === 'running') {
+        summaryPollTimerRef.current = window.setTimeout(() => {
+          pollSummaryTask(taskId);
+        }, 2000);
+        return;
+      }
+
+      await fetchFolderData();
+
+      if (task.status === 'success') {
+        window.setTimeout(() => {
+          setUploadQueue([]);
+          setSummaryTask(null);
+          setShowUploadPanel(false);
+        }, 2000);
+        return;
+      }
+
+      if (task.status === 'failed') {
+        alert(task.message || '生成失败，请联系管理员');
+      }
+    } catch (error: any) {
+      console.error('轮询批量总结任务失败', error);
+      setSummaryTask({
+        task_id: taskId,
+        status: 'failed',
+        message: error?.response?.data?.detail || '生成失败，请联系管理员',
+        total_count: 0,
+        completed_count: 0,
+        success_count: 0,
+        failed_count: 0,
+        processing_count: 0,
+        pending_count: 0,
+        processing_file_id: null,
+        elapsed_seconds: 0,
+        timeout_seconds: 300,
+        retry_attempts: {},
+        failed_file_ids: [],
+        success_file_ids: [],
+        last_error_by_file: {},
+      });
+    }
+  }, []);
+
+  const startBatchSummary = useCallback(async (fileIds: number[]) => {
+    if (fileIds.length === 0) return;
+    const task = await ragApi.batchSummarizeFiles(fileIds);
+    setSummaryTask(task);
+    if (summaryPollTimerRef.current) {
+      window.clearTimeout(summaryPollTimerRef.current);
+    }
+    if (task.status === 'running') {
+      summaryPollTimerRef.current = window.setTimeout(() => {
+        pollSummaryTask(task.task_id);
+      }, 1500);
+    }
+  }, [pollSummaryTask]);
+
+  const uploadFile = async (item: UploadItem): Promise<number | null> => {
     const formData = new FormData();
     formData.append('file', item.file);
     formData.append('folder_id', id || '');
+    formData.append('auto_start_summary', 'false');
     
     if (item.relativePath !== item.file.name) {
       formData.append('relative_path', item.relativePath);
@@ -225,16 +314,16 @@ const FolderDetail = () => {
         u.id === item.id ? { ...u, status: 'uploading', progress: 50 } : u
       ));
       
-      await api.post('/files/upload', formData, {
+      const response = await api.post('/files/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
 
       setUploadQueue(prev => prev.map(u => 
-        u.id === item.id ? { ...u, status: 'success', progress: 100 } : u
+        u.id === item.id ? { ...u, status: 'success', progress: 100, uploadedFileId: response.data.id } : u
       ));
-      return true;
+      return response.data.id;
     } catch (error: any) {
       setUploadQueue(prev => prev.map(u => 
         u.id === item.id ? { 
@@ -243,7 +332,34 @@ const FolderDetail = () => {
           error: error.response?.data?.detail || '上传失败' 
         } : u
       ));
-      return false;
+      return null;
+    }
+  };
+
+  const retrySingleUpload = async (item: UploadItem) => {
+    const uploadedFileId = await uploadFile(item);
+    if (!uploadedFileId) return;
+    try {
+      await startBatchSummary([uploadedFileId]);
+    } catch (error: any) {
+      setSummaryTask({
+        task_id: 'local-error',
+        status: 'failed',
+        message: error?.response?.data?.detail || '生成失败，请联系管理员',
+        total_count: 1,
+        completed_count: 0,
+        success_count: 0,
+        failed_count: 1,
+        processing_count: 0,
+        pending_count: 0,
+        processing_file_id: null,
+        elapsed_seconds: 0,
+        timeout_seconds: 300,
+        retry_attempts: {},
+        failed_file_ids: [uploadedFileId],
+        success_file_ids: [],
+        last_error_by_file: {},
+      });
     }
   };
 
@@ -252,16 +368,47 @@ const FolderDetail = () => {
     if (pendingItems.length === 0) return;
 
     setIsUploading(true);
+    setSummaryTask(null);
+    const uploadedFileIds: number[] = [];
 
     for (const item of pendingItems) {
-      await uploadFile(item);
+      const uploadedFileId = await uploadFile(item);
+      if (uploadedFileId) {
+        uploadedFileIds.push(uploadedFileId);
+      }
     }
 
     setIsUploading(false);
-    
-    const failedCount = uploadQueue.filter(u => u.status === 'failed').length;
-    if (failedCount === 0) {
-      setTimeout(() => {
+
+    if (uploadedFileIds.length > 0) {
+      try {
+        await startBatchSummary(uploadedFileIds);
+      } catch (error: any) {
+        setSummaryTask({
+          task_id: 'local-error',
+          status: 'failed',
+          message: error?.response?.data?.detail || '生成失败，请联系管理员',
+          total_count: uploadedFileIds.length,
+          completed_count: 0,
+          success_count: 0,
+          failed_count: uploadedFileIds.length,
+          processing_count: 0,
+          pending_count: 0,
+          processing_file_id: null,
+          elapsed_seconds: 0,
+          timeout_seconds: 300,
+          retry_attempts: {},
+          failed_file_ids: [],
+          success_file_ids: [],
+          last_error_by_file: {},
+        });
+      }
+      return;
+    }
+
+    const latestFailedCount = uploadQueue.filter(u => u.status === 'failed').length;
+    if (latestFailedCount === 0) {
+      window.setTimeout(() => {
         setUploadQueue([]);
         setShowUploadPanel(false);
         fetchFolderData();
@@ -275,14 +422,47 @@ const FolderDetail = () => {
 
   const retryFailed = () => {
     setUploadQueue(prev => prev.map(u => 
-      u.status === 'failed' ? { ...u, status: 'pending', error: undefined } : u
+      u.status === 'failed' ? { ...u, status: 'pending', error: undefined, progress: 0 } : u
     ));
+    setSummaryTask(null);
   };
+
+  const handleSort = (key: 'name' | 'original_name' | 'size' | 'created_at') => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+  const sortedSubfolders = [...subfolders].sort((a, b) => {
+    const comparison = naturalCollator.compare(a.name, b.name);
+    return sortConfig.direction === 'asc' ? comparison : -comparison;
+  });
+
+  const sortedFiles = [...files].sort((a, b) => {
+    let comparison: number;
+    
+    if (sortConfig.key === 'original_name') {
+      comparison = naturalCollator.compare(a.original_name, b.original_name);
+    } else if (sortConfig.key === 'size') {
+      comparison = a.size - b.size;
+    } else if (sortConfig.key === 'created_at') {
+      comparison = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    } else {
+      comparison = naturalCollator.compare(a.original_name, b.original_name);
+    }
+    
+    return sortConfig.direction === 'asc' ? comparison : -comparison;
+  });
 
   const pendingCount = uploadQueue.filter(u => u.status === 'pending').length;
   const uploadingCount = uploadQueue.filter(u => u.status === 'uploading').length;
   const successCount = uploadQueue.filter(u => u.status === 'success').length;
   const failedCount = uploadQueue.filter(u => u.status === 'failed').length;
+  const isSummaryRunning = summaryTask?.status === 'running';
+  const canClosePanel = !isUploading && !isSummaryRunning;
 
   if (!folder) return <div className="p-8 text-center text-slate-500">加载中...</div>;
 
@@ -323,7 +503,7 @@ const FolderDetail = () => {
               {!isSecondLevel && (
                 <button 
                   onClick={() => folderInputRef.current?.click()}
-                  disabled={isUploading}
+                  disabled={isUploading || isSummaryRunning}
                   className="flex items-center bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
                 >
                   <Folder className="w-4 h-4 mr-2" />
@@ -332,7 +512,7 @@ const FolderDetail = () => {
               )}
               <button 
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
+                disabled={isUploading || isSummaryRunning}
                 className="flex items-center bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium shadow-sm hover:shadow transition-all disabled:opacity-50"
               >
                 <Upload className="w-4 h-4 mr-2" />
@@ -370,9 +550,21 @@ const FolderDetail = () => {
                     失败: <strong>{failedCount}</strong>
                   </span>
                 )}
+                {summaryTask && (
+                  <span className={`${summaryTask.status === 'failed' ? 'text-red-500' : summaryTask.status === 'partial_failed' ? 'text-amber-600' : 'text-indigo-600'} flex items-center`}>
+                    {summaryTask.status === 'running' ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                    ) : summaryTask.status === 'success' ? (
+                      <CheckCircle className="w-3.5 h-3.5 mr-1" />
+                    ) : (
+                      <XCircle className="w-3.5 h-3.5 mr-1" />
+                    )}
+                    总结: <strong>{summaryTask.success_count}/{summaryTask.total_count}</strong>
+                  </span>
+                )}
               </div>
               <div className="flex items-center space-x-2">
-                {failedCount > 0 && (
+                {failedCount > 0 && !isSummaryRunning && (
                   <button
                     onClick={retryFailed}
                     className="text-sm text-amber-600 hover:text-amber-700 font-medium"
@@ -380,7 +572,7 @@ const FolderDetail = () => {
                     重试失败项
                   </button>
                 )}
-                {pendingCount > 0 && !isUploading && (
+                {pendingCount > 0 && !isUploading && !isSummaryRunning && (
                   <button
                     onClick={startUpload}
                     className="px-4 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
@@ -388,10 +580,14 @@ const FolderDetail = () => {
                     开始上传
                   </button>
                 )}
-                {(successCount > 0 || failedCount > 0) && !isUploading && (
+                {(successCount > 0 || failedCount > 0 || summaryTask) && canClosePanel && (
                   <button
                     onClick={() => {
+                      if (summaryPollTimerRef.current) {
+                        window.clearTimeout(summaryPollTimerRef.current);
+                      }
                       setUploadQueue([]);
+                      setSummaryTask(null);
                       setShowUploadPanel(false);
                       if (successCount > 0) fetchFolderData();
                     }}
@@ -402,6 +598,35 @@ const FolderDetail = () => {
                 )}
               </div>
             </div>
+            {summaryTask && (
+              <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium text-slate-700">
+                    {summaryTask.status === 'running' ? '正在批量生成总结' : '总结任务结果'}
+                  </span>
+                  <span>
+                    {summaryTask.completed_count}/{summaryTask.total_count}，耗时 {summaryTask.elapsed_seconds}s / {summaryTask.timeout_seconds}s
+                  </span>
+                </div>
+                <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden">
+                  <div
+                    className={`h-full transition-all ${summaryTask.status === 'failed' ? 'bg-red-500' : summaryTask.status === 'partial_failed' ? 'bg-amber-500' : 'bg-indigo-500'}`}
+                    style={{ width: `${summaryTask.total_count > 0 ? Math.min((summaryTask.completed_count / summaryTask.total_count) * 100, 100) : 0}%` }}
+                  />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                  <span>成功 {summaryTask.success_count}</span>
+                  <span>失败 {summaryTask.failed_count}</span>
+                  <span>处理中 {summaryTask.processing_count}</span>
+                  <span>待处理 {summaryTask.pending_count}</span>
+                </div>
+                {summaryTask.message ? (
+                  <div className={`mt-2 text-xs ${summaryTask.status === 'failed' ? 'text-red-500' : summaryTask.status === 'partial_failed' ? 'text-amber-600' : 'text-slate-500'}`}>
+                    {summaryTask.message}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
           <div className="max-h-64 overflow-y-auto">
             {uploadQueue.map(item => (
@@ -430,7 +655,7 @@ const FolderDetail = () => {
                   )}
                   {item.status === 'failed' && (
                     <button
-                      onClick={() => uploadFile(item)}
+                      onClick={() => retrySingleUpload(item)}
                       className="text-xs text-blue-600 hover:text-blue-700 font-medium"
                     >
                       重试
@@ -463,6 +688,7 @@ const FolderDetail = () => {
                   {!isSecondLevel && (
                     <button 
                       onClick={() => folderInputRef.current?.click()}
+                      disabled={isUploading || isSummaryRunning}
                       className="flex items-center bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                     >
                       <Folder className="w-4 h-4 mr-2" />
@@ -471,6 +697,7 @@ const FolderDetail = () => {
                   )}
                   <button 
                     onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading || isSummaryRunning}
                     className="flex items-center bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
                   >
                     <Upload className="w-4 h-4 mr-2" />
@@ -511,15 +738,23 @@ const FolderDetail = () => {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50/50 border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400 font-semibold">
-                    <th className="p-4 font-medium">名称</th>
-                    <th className="p-4 font-medium hidden sm:table-cell">大小</th>
+                    <th className="p-4 font-medium cursor-pointer hover:text-slate-600 select-none" onClick={() => handleSort('name')}>
+                      名称 {sortConfig.key === 'name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
+                    <th className="p-4 font-medium hidden sm:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleSort('size')}>
+                      大小 {sortConfig.key === 'size' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
                     <th className="p-4 font-medium hidden md:table-cell">状态</th>
-                    <th className="p-4 font-medium hidden md:table-cell">上传时间</th>
+                    <th className="p-4 font-medium hidden md:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleSort('created_at')}>
+                      上传时间 {sortConfig.key === 'created_at' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                    </th>
                     <th className="p-4"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50 text-sm">
-                  {subfolders.map(subfolder => (
+                  {sortedSubfolders.map((subfolder, idx) => {
+                    const isLastItem = idx === sortedSubfolders.length - 1 && sortedFiles.length === 0;
+                    return (
                     <tr key={`folder-${subfolder.id}`} onClick={() => navigate(`/folders/${subfolder.id}`)} className="hover:bg-slate-50/50 transition-colors group cursor-pointer">
                       <td className="p-4 flex items-center">
                         <div className="w-8 h-8 flex items-center justify-center mr-3 bg-amber-100 rounded-lg">
@@ -552,7 +787,7 @@ const FolderDetail = () => {
                               <div
                                 onClick={(e) => e.stopPropagation()}
                                 onMouseDown={(e) => e.stopPropagation()}
-                                className="absolute right-0 mt-2 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20"
+                                className={`absolute right-0 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20 ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
                               >
                                 <button
                                   onClick={() => openRenameDialog({ kind: 'folder', id: subfolder.id, name: subfolder.name })}
@@ -574,8 +809,10 @@ const FolderDetail = () => {
                         )}
                       </td>
                     </tr>
-                  ))}
-                  {files.map(file => (
+                  );})}
+                  {sortedFiles.map((file, idx) => {
+                    const isLastItem = idx === sortedFiles.length - 1;
+                    return (
                     <tr key={file.id} onClick={() => navigate(`/files/${file.id}`)} className="hover:bg-slate-50/50 transition-colors group cursor-pointer">
                       <td className="p-4 flex items-center">
                         <div className="w-8 h-8 flex items-center justify-center mr-3">
@@ -612,7 +849,7 @@ const FolderDetail = () => {
                               <div
                                 onClick={(e) => e.stopPropagation()}
                                 onMouseDown={(e) => e.stopPropagation()}
-                                className="absolute right-0 mt-2 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20"
+                                className={`absolute right-0 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20 ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
                               >
                                 <button
                                   onClick={() => openRenameDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
@@ -634,12 +871,12 @@ const FolderDetail = () => {
                         )}
                       </td>
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-4">
-                {subfolders.map(subfolder => (
+                {sortedSubfolders.map(subfolder => (
                   <div 
                     key={`folder-${subfolder.id}`} 
                     onClick={() => navigate(`/folders/${subfolder.id}`)} 
@@ -663,7 +900,7 @@ const FolderDetail = () => {
                     </p>
                   </div>
                 ))}
-                {files.map(file => (
+                {sortedFiles.map(file => (
                   <div 
                     key={file.id} 
                     onClick={() => navigate(`/files/${file.id}`)} 

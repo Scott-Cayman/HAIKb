@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -15,6 +15,7 @@ from app.models.file import File
 from app.models.rag_index import RagIndex, RagSource, SummaryChunk
 from app.models.user import User
 from app.rag.index_manager import index_manager
+from app.services.batch_summary_service import batch_summary_service
 from app.services.summary_index_service import summary_index_service
 
 
@@ -28,6 +29,10 @@ class SummaryTagUpdateRequest(BaseModel):
     region_tags: Optional[List[str]] = None
     industry_tags: Optional[List[str]] = None
     keyword_tags: Optional[List[str]] = None
+
+
+class BatchSummaryRequest(BaseModel):
+    file_ids: List[int]
 
 
 @router.get("/indices")
@@ -65,11 +70,39 @@ def rebuild_default_index(db: Session = Depends(get_db), current_user: User = De
 
 
 @router.post("/files/{file_id}/summarize")
-def summarize_file(file_id: int, current_user: User = Depends(get_current_user)):
+def summarize_file(file_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file.summary_status = "processing"
+    file.summary_error = None
+    db.commit()
+    
+    background_tasks.add_task(summary_index_service.generate_summary_and_index_task, file_id)
+    return {"file_id": file_id, "status": "processing", "message": "Summary generation started in background"}
+
+
+@router.post("/files/batch-summarize")
+def batch_summarize_files(
+    payload: BatchSummaryRequest,
+    current_user: User = Depends(get_current_user),
+):
     try:
-        return summary_index_service.summarize_file(file_id=file_id, reindex=True)
+        return batch_summary_service.create_task(payload.file_ids)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/batch-tasks/{task_id}")
+def get_batch_summary_task(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return batch_summary_service.get_task_status(task_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/files/{file_id}/summary")
@@ -134,11 +167,17 @@ def update_file_tags(
 
 
 @router.post("/files/{file_id}/reindex-summary")
-def reindex_summary(file_id: int, current_user: User = Depends(get_current_user)):
-    try:
-        return summary_index_service.reindex_summary(file_id=file_id)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+def reindex_summary(file_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    file.summary_status = "processing"
+    file.summary_error = None
+    db.commit()
+    
+    background_tasks.add_task(summary_index_service.reindex_summary, file_id)
+    return {"file_id": file_id, "status": "processing", "message": "Reindexing started in background"}
 
 
 @router.get("/status")

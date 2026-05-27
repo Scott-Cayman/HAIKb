@@ -25,7 +25,11 @@ const RagManage = () => {
   };
 
   useEffect(() => {
-    loadData();
+    // 延迟执行以避免在 effect 中同步调用 setState
+    const timer = setTimeout(() => {
+      loadData();
+    }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   const handleRebuild = async () => {

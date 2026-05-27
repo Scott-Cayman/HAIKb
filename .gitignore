@@ -4,10 +4,12 @@
 
 *.log
 *.pid
+nohup.out
 
 storage/
 
 backend/data/*.db
+data/
 
 **/__pycache__/
 **/*.py[cod]
@@ -25,3 +27,27 @@ build/
 **/*.tsbuildinfo
 
 .DS_Store
+
+# 测试文件
+test_*.py
+test_*.xlsx
+create_excel.py
+
+# 临时脚本
+cron_manager.sh
+setup_cron.sh
+start_watchdog.sh
+stop_watchdog.sh
+watchdog.sh
+
+# 调试文件
+debug_*.py
+list_files.py
+
+# 工具脚本（可选）
+auto_logger.py
+manage_logs.py
+utils/
+
+# 性能优化文档
+PERFORMANCE_OPTIMIZATION.md

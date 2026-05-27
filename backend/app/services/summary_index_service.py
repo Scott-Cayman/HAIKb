@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 
 from app.config import settings
 from app.database import SessionLocal
@@ -11,28 +12,41 @@ from app.services.document_parser import UnsupportedDocumentError, document_pars
 from app.services.summary_generator import summary_generator_service
 from app.services.folder_summary_service import folder_summary_service
 
+logger = logging.getLogger(__name__)
+
 
 class SummaryIndexService:
     """串起解析、总结、落盘、索引四个步骤。"""
 
     def summarize_file(self, file_id: int, reindex: bool = True) -> dict:
+        logger.info(f"Starting summarize_file for file ID: {file_id}")
+        folder_id = None
+        
         with SessionLocal() as db:
             file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
             if not file:
+                logger.error(f"File {file_id} not found")
                 raise ValueError(f"文件 {file_id} 不存在")
+            folder_id = file.folder_id
 
+            logger.info(f"Processing file: {file.original_name} (ext: {file.file_ext})")
+            
             file.summary_status = "processing"
             file.summary_error = None
             db.commit()
 
             try:
+                logger.info(f"Extracting text from file...")
                 parsed = document_parser_service.extract_first_pages_text(file=file, max_pages=10)
+                logger.info(f"Text extraction complete, confidence: {parsed.get('parse_confidence')}")
             except UnsupportedDocumentError as exc:
+                logger.warning(f"Unsupported document: {str(exc)}")
                 file.summary_status = "unsupported"
                 file.summary_error = str(exc)
                 db.commit()
                 return {"file_id": file.id, "status": "unsupported", "message": str(exc)}
             except Exception as exc:
+                logger.exception(f"Error extracting text: {str(exc)}")
                 file.summary_status = "failed"
                 file.summary_error = str(exc)
                 db.commit()
@@ -92,9 +106,9 @@ class SummaryIndexService:
                 db.commit()
 
         # 更新文件夹总结
-        if file and file.folder_id:
+        if folder_id:
             try:
-                folder_summary_service.update_folder_summary(file.folder_id)
+                folder_summary_service.update_folder_summary(folder_id)
             except Exception:
                 pass
 
@@ -112,15 +126,8 @@ class SummaryIndexService:
                     db.commit()
 
     def reindex_summary(self, file_id: int) -> dict:
-        with SessionLocal() as db:
-            summary = db.query(DocumentSummary).filter(DocumentSummary.file_id == file_id).first()
-            if not summary:
-                raise ValueError(f"文件 {file_id} 尚未生成总结")
-            summary_id = summary.id
-        index = index_manager.get_default_index()
-        pipeline = index.get_indexing_pipeline(settings={"retrieval_mode": "hybrid"})
-        result = pipeline.run(summary_id, reindex=True)
-        return {"file_id": file_id, "summary_id": summary_id, "status": "success", "result": result}
+        """重新生成总结并索引（使用新的视觉 LLM 链路）"""
+        return self.summarize_file(file_id=file_id, reindex=True)
 
     def _write_summary_markdown(self, file_id: int, markdown: str) -> Path:
         summary_dir = Path(settings.SUMMARY_DIR)

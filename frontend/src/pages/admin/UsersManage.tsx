@@ -34,6 +34,10 @@ const UsersManage = () => {
     department_name: '',
     is_active: true,
   });
+  const [sortConfig, setSortConfig] = useState<{ key: 'name' | 'username' | 'department_name'; direction: 'asc' | 'desc' }>({
+    key: 'name',
+    direction: 'asc'
+  });
 
   const fetchUsers = async () => {
     try {
@@ -49,7 +53,10 @@ const UsersManage = () => {
   };
 
   useEffect(() => {
-    fetchUsers();
+    const timer = setTimeout(() => {
+      fetchUsers();
+    }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -101,6 +108,29 @@ const UsersManage = () => {
       setError(err?.response?.data?.detail || 'Failed to delete user');
     }
   };
+
+  const handleSort = (key: 'name' | 'username' | 'department_name') => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
+
+  const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+  const sortedUsers = [...users].sort((a, b) => {
+    let comparison: number;
+    
+    if (sortConfig.key === 'name') {
+      comparison = naturalCollator.compare(a.name, b.name);
+    } else if (sortConfig.key === 'username') {
+      comparison = naturalCollator.compare(a.username || '', b.username || '');
+    } else {
+      comparison = naturalCollator.compare(a.department_name || '', b.department_name || '');
+    }
+    
+    return sortConfig.direction === 'asc' ? comparison : -comparison;
+  });
 
   const getRoleBadge = (user: UserType) => {
     if (user.is_super_admin) {
@@ -157,27 +187,27 @@ const UsersManage = () => {
       <div className="bg-slate-800 border border-slate-700 rounded-2xl shadow-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
-            <thead className="bg-slate-900/50">
-              <tr>
-                <th className="px-6 py-4 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
-                  用户
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
-                  部门
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
-                  角色
-                </th>
-                <th className="px-6 py-4 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
-                  状态
-                </th>
-                <th className="px-6 py-4 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
-                  操作
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-700">
-              {users.map((user) => (
+              <thead className="bg-slate-900/50">
+                <tr>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-300 select-none" onClick={() => handleSort('name')}>
+                    用户 {sortConfig.key === 'name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-slate-400 uppercase tracking-wider cursor-pointer hover:text-slate-300 select-none" onClick={() => handleSort('department_name')}>
+                    部门 {sortConfig.key === 'department_name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    角色
+                  </th>
+                  <th className="px-6 py-4 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    状态
+                  </th>
+                  <th className="px-6 py-4 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
+                    操作
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700">
+                {sortedUsers.map((user) => (
                 <tr key={user.id} className="hover:bg-slate-700/30 transition-colors">
                   <td className="px-6 py-4">
                     {editingUserId === user.id ? (

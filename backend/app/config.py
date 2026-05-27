@@ -23,12 +23,21 @@ class Settings(BaseSettings):
     DINGTALK_REDIRECT_URI: str = ''
     DINGTALK_ALLOWED_EMAIL_DOMAINS: str = '@himice.com'
     DINGTALK_OAUTH_STATE_EXPIRE_SECONDS: int = 10 * 60
+    SUPER_ADMIN_EMAILS: str = ''
+    ADMIN_EMAILS: str = ''
 
     JWT_SECRET: str = 'supersecretkey_change_me_in_production'
     ALGORITHM: str = 'HS256'
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
 
+    POSTGRES_USER: str = ''
+    POSTGRES_PASSWORD: str = ''
+    POSTGRES_HOST: str = ''
+    POSTGRES_PORT: str = ''
+    POSTGRES_DB: str = ''
+    POSTGRES_URL: str = ''
     DATABASE_URL: str = DEFAULT_DATABASE_URL
+
     STORAGE_DIR: str = str(DEFAULT_STORAGE_DIR)
     PREVIEW_DIR: str = str(DEFAULT_PREVIEW_DIR)
     SUMMARY_DIR: str = str(DEFAULT_SUMMARY_DIR)
@@ -49,21 +58,9 @@ class Settings(BaseSettings):
     ARK_TIMEOUT_SECONDS: int = 60
     QWEN_AGENT_ENABLED: bool = False
     
-    @property
-    def effective_llm_base_url(self) -> str:
-        return self.ARK_BASE_URL or self.LLM_BASE_URL
-    
-    @property
-    def effective_llm_api_key(self) -> str:
-        return self.ARK_API_KEY or self.LLM_API_KEY
-    
-    @property
-    def effective_llm_model(self) -> str:
-        return self.ARK_TEXT_MODEL or self.LLM_MODEL
-    
-    @property
-    def effective_llm_timeout(self) -> int:
-        return self.ARK_TIMEOUT_SECONDS or self.LLM_TIMEOUT_SECONDS
+    OLLAMA_BASE_URL: str = 'http://localhost:11434'
+    OLLAMA_VISION_MODEL: str = 'gemma4:e4b'
+    OLLAMA_TIMEOUT_SECONDS: int = 60
 
     VECTOR_STORE: str = 'local'
     VECTOR_COLLECTION_PREFIX: str = 'haikb_summary'
@@ -73,6 +70,30 @@ class Settings(BaseSettings):
     class Config:
         env_file = '.env'
         extra = 'ignore'
+
+    @property
+    def effective_database_url(self):
+        if self.POSTGRES_URL:
+            return self.POSTGRES_URL
+        if self.POSTGRES_USER and self.POSTGRES_DB:
+            return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        return self.DATABASE_URL
+
+    @property
+    def effective_llm_base_url(self):
+        return self.ARK_BASE_URL or self.LLM_BASE_URL
+
+    @property
+    def effective_llm_api_key(self):
+        return self.ARK_API_KEY or self.LLM_API_KEY
+
+    @property
+    def effective_llm_model(self):
+        return self.ARK_TEXT_MODEL or self.LLM_MODEL
+
+    @property
+    def effective_llm_timeout(self):
+        return self.ARK_TIMEOUT_SECONDS or self.LLM_TIMEOUT_SECONDS
 
 
 settings = Settings()
