@@ -63,6 +63,110 @@ const normalizeTag = (value: unknown) => {
   return text;
 };
 
+const ImageViewer = ({ url, alt }: { url: string; alt: string }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState<number>(1.0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+
+      if (isExpanded) {
+        setIsExpanded(false);
+        return;
+      }
+
+      if (!document.fullscreenEnabled || !containerRef.current?.requestFullscreen) {
+        setIsExpanded((value) => !value);
+        return;
+      }
+
+      await containerRef.current.requestFullscreen();
+    } catch {
+      setIsExpanded((value) => !value);
+    }
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isExpanded) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsExpanded(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isExpanded]);
+
+  const isViewerMaximized = isFullscreen || isExpanded;
+
+  const resetScale = () => setScale(1.0);
+
+  return (
+    <div
+      ref={containerRef}
+      className={`flex flex-col h-full w-full bg-slate-50 rounded-xl overflow-hidden border border-slate-200 ${
+        isViewerMaximized ? 'fixed inset-0 z-50 rounded-none border-0' : ''
+      }`}
+    >
+      <div className="flex items-center justify-between p-3 bg-white border-b border-slate-200 shadow-sm z-10">
+        <div className="flex items-center space-x-1">
+          <span className="text-sm font-medium text-slate-600 select-none">{alt}</span>
+        </div>
+
+        <div className="flex items-center space-x-1">
+          <button onClick={() => setScale((s) => Math.max(0.2, s - 0.2))} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
+            <ZoomOut className="w-5 h-5" />
+          </button>
+          <span className="text-sm font-medium text-slate-600 min-w-[3.5rem] text-center select-none">{Math.round(scale * 100)}%</span>
+          <button onClick={() => setScale((s) => Math.min(5.0, s + 0.2))} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
+            <ZoomIn className="w-5 h-5" />
+          </button>
+          <button onClick={resetScale} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
+            <RefreshCcw className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex items-center space-x-1">
+          <button onClick={toggleFullscreen} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
+            <Maximize2 className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-auto p-4 flex justify-center items-center bg-slate-200/50 custom-scrollbar">
+        {!imageLoaded && (
+          <div className="flex flex-col items-center justify-center space-y-3">
+            <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+            <p className="text-slate-500 text-sm font-medium">加载图片...</p>
+          </div>
+        )}
+        <img
+          src={url}
+          alt={alt}
+          className="object-contain shadow-sm transition-transform duration-200"
+          style={{ transform: `scale(${scale})`, display: imageLoaded ? 'block' : 'none' }}
+          onLoad={() => setImageLoaded(true)}
+        />
+      </div>
+    </div>
+  );
+};
+
 const PdfViewer = ({ url }: { url: string }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState<number>();
@@ -261,6 +365,7 @@ const FilePreview = () => {
   const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
   const isAdmin = !!user?.is_admin;
+  const isSuperAdmin = !!user?.is_super_admin;
   const [file, setFile] = useState<FileDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -436,11 +541,7 @@ const FilePreview = () => {
     if (file.preview_status === 'success' && previewUrl) {
       const isImage = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(file.file_ext);
       if (isImage) {
-        return (
-          <div className="flex items-center justify-center h-full bg-slate-50 rounded-xl overflow-hidden p-4">
-            <img src={previewUrl} alt={file.original_name} className="max-w-full max-h-full object-contain shadow-sm" />
-          </div>
-        );
+        return <ImageViewer url={previewUrl} alt={file.original_name} />;
       }
       return <PdfViewer url={previewUrl} />;
     }
@@ -529,10 +630,14 @@ const FilePreview = () => {
         </div>
 
         <div className="flex items-center space-x-3">
-          <button onClick={handleDownload} className="flex items-center space-x-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors font-medium">
-            <Download className="w-4 h-4" />
-            <span>下载</span>
-          </button>
+          {isSuperAdmin ? (
+            <button onClick={handleDownload} className="flex items-center space-x-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors font-medium">
+              <Download className="w-4 h-4" />
+              <span>下载</span>
+            </button>
+          ) : (
+            <span className="text-sm text-slate-500">如需下载请联系管理员</span>
+          )}
         </div>
       </div>
 
