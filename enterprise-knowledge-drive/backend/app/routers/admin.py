@@ -113,6 +113,28 @@ def delete_user(user_id: int, db: Session = Depends(get_db), current_admin: User
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
+    # 强制删除：先删除所有关联数据
+    from app.models import (
+        AgentMessage,
+        Favorite,
+        AuditLog,
+    )
+    
+    # 删除关联的 agent 消息
+    db.query(AgentMessage).filter(AgentMessage.user_id == user_id).delete()
+    
+    # 删除收藏
+    db.query(Favorite).filter(Favorite.user_id == user_id).delete()
+    
+    # 删除审计日志
+    db.query(AuditLog).filter(AuditLog.user_id == user_id).delete()
+    
+    # 对于文件夹和文件，将 created_by/uploaded_by 设置为 null
+    from app.models import Folder, File
+    db.query(Folder).filter(Folder.created_by == user_id).update({"created_by": None})
+    db.query(File).filter(File.uploaded_by == user_id).update({"uploaded_by": None})
+    
+    # 最后删除用户
     db.delete(user)
     db.commit()
     

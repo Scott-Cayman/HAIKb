@@ -43,10 +43,11 @@ const UsersManage = () => {
     try {
       setLoading(true);
       const response = await api.get('/admin/users');
-      setUsers(response.data.users);
+      setUsers(response.data.users || []);
       setError(null);
     } catch (err: any) {
       setError(err?.response?.data?.detail || 'Failed to fetch users');
+      setUsers([]);
     } finally {
       setLoading(false);
     }
@@ -118,11 +119,13 @@ const UsersManage = () => {
 
   const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-  const sortedUsers = [...users].sort((a, b) => {
+  const sortedUsers = users && users.length > 0 ? [...users].sort((a, b) => {
     let comparison: number;
     
+    if (!a || !b) return 0;
+    
     if (sortConfig.key === 'name') {
-      comparison = naturalCollator.compare(a.name, b.name);
+      comparison = naturalCollator.compare(a.name || '', b.name || '');
     } else if (sortConfig.key === 'username') {
       comparison = naturalCollator.compare(a.username || '', b.username || '');
     } else {
@@ -130,7 +133,7 @@ const UsersManage = () => {
     }
     
     return sortConfig.direction === 'asc' ? comparison : -comparison;
-  });
+  }) : [];
 
   const getRoleBadge = (user: UserType) => {
     if (user.is_super_admin) {
