@@ -14,13 +14,14 @@ from app.services.llm_service import llm_service
 
 SYSTEM_PROMPT = """你是 HAIKb 企业知识库 Agent，负责帮助用户从公司历史文件中找到可复用的项目资料、标书文件、投标方案和案例文件。
 
-PROJECT_ROOT="${PROJECT_ROOT:-$DEFAULT_PROJECT_ROOT}"
 1. 你不能直接读取或检索原文件全文。
 2. 你只能基于系统提供的 AI_DOCUMENT_SUMMARY 总结文档回答。
-3. 用户要求找文件时，你必须返回相关原文件，而不是只给文字回答。
-4. 每个推荐文件都必须包含两句话简介。
-5. 不要编造不存在的文件、客户、项目、金额、评分标准。
-6. 如果没有找到高匹配文件，要说明未找到，并可以推荐相近文件。"""
+3. 回答格式：先直接回答用户的问题，再给出推荐文件和依据（如果有）。
+4. 如果是查找文件类问题，必须返回相关原文件，每个推荐文件都必须包含两句话简介。
+5. 如果是问题咨询类，基于知识库和自身理解给出详细、完整的解答，尽可能展开说明，再附上相关参考文件。
+6. 回答要尽可能详细、全面，不要过于简短，分点说明会更好。
+7. 不要编造不存在的文件、客户、项目、金额、评分标准。
+8. 如果没有找到高匹配文件，可以基于知识库给出相近建议，或说明知识库内容不足。"""
 
 
 class OptimizedAgentService:
@@ -147,12 +148,9 @@ class OptimizedAgentService:
     def _build_answer(self, query: str, evidence: List[dict], related_files: List[dict]) -> str:
         if not evidence:
             return (
-                "## 匹配结论\n"
-                "当前没有找到高匹配的总结文档。\n\n"
-                "## 推荐文件\n"
-                "暂无可推荐文件。\n\n"
-                "## 回答\n"
-                "当前知识库里没有足够证据支撑结论，建议换个关键词再试，或先上传相关资料。"
+                "当前知识库里没有找到足够相关的文档，建议换个关键词再试，或先上传相关资料。\n\n"
+                "### 推荐文件\n"
+                "暂无可推荐文件。"
             )
 
         evidence_text = "\n\n".join(
@@ -172,8 +170,9 @@ class OptimizedAgentService:
                 f"推荐文件：\n{related_text}\n\n"
                 "请基于证据回答用户问题。"
                 "要求：1. 只基于证据回答，不要编造。"
-                "2. 如果证据不足，请明确说明。"
-                "3. 输出格式必须包含：匹配结论、推荐文件、回答。"
+                "2. 如果证据不足，请明确说明，并基于自身理解给出参考建议。"
+                "3. 输出格式：先直接给出回答，再列出推荐文件（如果有），最后给出依据说明。"
+                "4. 不要使用'匹配结论'这样的标题。"
             )
             try:
                 return llm_service.chat(
@@ -181,8 +180,8 @@ class OptimizedAgentService:
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
-                    temperature=0.2,
-                    max_tokens=1400,
+                    temperature=0.3,
+                    max_tokens=2048,
                 )
             except Exception:
                 pass
@@ -192,11 +191,9 @@ class OptimizedAgentService:
             for item in related_files[: min(len(related_files), 5)]
         )
         return (
-            "## 匹配结论\n"
-            f"已从 AI 总结文档中找到 {len(related_files)} 份较相关文件，可用于回答\"{query}\"。\n\n"
-            "## 推荐文件\n"
+            f"已从 AI 总结文档中找到 {len(related_files)} 份较相关文件，可用于参考。\n\n"
+            "### 推荐文件\n"
             f"{recommend_lines}\n\n"
-            "## 回答\n"
             "系统已根据命中的总结文档整理出相关资料，优先建议先查看推荐文件的 AI 总结和原文件预览，再核对全文细节。"
         )
 

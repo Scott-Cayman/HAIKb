@@ -293,9 +293,11 @@ const Home = () => {
                 </div>
               </div>
               <h3 className="font-semibold text-slate-800 mb-1 group-hover:text-blue-600 transition-colors">{folder.name}</h3>
-              <div className="flex items-center text-xs text-slate-400 space-x-3">
-                <span>{folder.description || '无描述'}</span>
-              </div>
+              {folder.description ? (
+                <div className="flex items-center text-xs text-slate-400 space-x-3">
+                  <span>{folder.description}</span>
+                </div>
+              ) : null}
             </div>
           ))}
 
@@ -407,7 +409,7 @@ const Home = () => {
                           <span className="font-medium text-slate-700 group-hover:text-blue-600 transition-colors">{folder.name}</span>
                         </div>
                       </td>
-                      <td className="p-4 text-slate-500 hidden md:table-cell">{folder.description || '无描述'}</td>
+                      <td className="p-4 text-slate-500 hidden md:table-cell">{folder.description || ''}</td>
                       <td className="p-4 text-right">
                         <div className="relative inline-flex items-center gap-2">
                           <FavoriteButton

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
 import { Bot, ChevronRight, Download, Eye, FileText, Loader2, Search as SearchIcon } from 'lucide-react';
 
 import { agentApi, AgentChatResponse } from '../services/agentApi';
@@ -61,9 +62,7 @@ const Search = () => {
     if (!result) return null;
     return (
       <article className="prose prose-slate max-w-none text-sm leading-7">
-        {result.answer.split('\n').map((line, index) => (
-          <p key={index}>{line}</p>
-        ))}
+        <ReactMarkdown>{result.answer}</ReactMarkdown>
       </article>
     );
   };

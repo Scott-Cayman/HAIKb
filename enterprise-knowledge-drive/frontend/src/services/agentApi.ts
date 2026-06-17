@@ -28,7 +28,7 @@ export interface AgentChatResponse {
 
 export const agentApi = {
   chat: async (payload: { query: string; conversation_id?: string; top_k?: number; retrieval_mode?: string }) => {
-    const response = await api.post<AgentChatResponse>('/agent/chat', payload, { timeout: 60000 });
+    const response = await api.post<AgentChatResponse>('/agent/chat', payload, { timeout: 600000 });
     return response.data;
   },
 };
