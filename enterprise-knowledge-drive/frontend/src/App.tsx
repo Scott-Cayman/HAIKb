@@ -21,7 +21,7 @@ import Forbidden from './pages/Forbidden';
 // Admin Pages
 import AdminDashboard from './pages/admin/AdminDashboard';
 import FoldersManage from './pages/admin/FoldersManage';
-import FilesManage from './pages/admin/FilesManage';
+import UsageStats from './pages/admin/UsageStats';
 import UsersManage from './pages/admin/UsersManage';
 import Settings from './pages/admin/Settings';
 import RagManage from './pages/admin/RagManage';
@@ -81,7 +81,7 @@ const App = () => {
           }>
             <Route index element={<AdminDashboard />} />
             <Route path="folders" element={<FoldersManage />} />
-            <Route path="files" element={<FilesManage />} />
+            <Route path="usage-stats" element={<UsageStats />} />
             <Route path="users" element={<UsersManage />} />
             <Route path="settings" element={<Settings />} />
             <Route path="rag" element={<RagManage />} />

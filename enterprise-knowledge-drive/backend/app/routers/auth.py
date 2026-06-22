@@ -86,6 +86,63 @@ def _format_dingtalk_error(payload: dict) -> str:
     return " ".join(parts) if parts else "未知错误"
 
 
+def _get_full_department_path(client: httpx.Client, dept_id: str, app_access_token: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """
+    获取完整的部门路径信息
+    返回: (完整部门路径, 根部门名称)
+    """
+    dept_path = []
+    current_dept_id = dept_id
+    
+    try:
+        while current_dept_id:
+            # 先尝试新接口
+            dept_res = client.get(
+                f"https://api.dingtalk.com/v1.0/contact/departments/{current_dept_id}",
+            )
+            dept_data = None
+            if dept_res.status_code < 400:
+                dept_data = dept_res.json() or {}
+                dept_name = dept_data.get("name")
+                parent_dept_id = dept_data.get("parent_id") or dept_data.get("parentId")
+            elif app_access_token:
+                # 回退到旧接口
+                legacy_dept_res = client.post(
+                    "https://oapi.dingtalk.com/topapi/v2/department/get",
+                    params={"access_token": app_access_token},
+                    json={"dept_id": int(current_dept_id)},
+                )
+                if legacy_dept_res.status_code < 400:
+                    legacy_payload = legacy_dept_res.json() or {}
+                    dept_data = legacy_payload.get("result") or {}
+                    dept_name = dept_data.get("name")
+                    parent_dept_id = dept_data.get("parent_id") or dept_data.get("parentId")
+                else:
+                    break
+            else:
+                break
+            
+            if dept_name:
+                dept_path.insert(0, dept_name)
+            
+            # 获取父部门ID，需要注意处理根部门的情况
+            if parent_dept_id and str(parent_dept_id) != "1":  # 通常 1 是根部门ID
+                current_dept_id = str(parent_dept_id)
+            else:
+                current_dept_id = None
+        
+        # 构建完整路径
+        full_path = "/".join(dept_path) if dept_path else None
+        # 根部门是路径的第一个元素
+        root_dept = dept_path[0] if dept_path else None
+        
+        return full_path, root_dept
+        
+    except Exception as e:
+        print(f"获取部门路径时出错: {e}")
+        return None, None
+
+
 class DingTalkCallbackRequest(BaseModel):
     code: str = Field(..., validation_alias=AliasChoices("code", "authCode", "auth_code"))
     state: str
@@ -211,7 +268,11 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
             dept_id = str(dept_id_list[0])
 
         dept_name = None
+        full_department_path = None
+        root_department_name = None
+        
         if dept_id:
+            # 先获取当前部门名称
             dept_res = client.get(
                 f"https://api.dingtalk.com/v1.0/contact/departments/{dept_id}",
                 headers={"x-acs-dingtalk-access-token": user_access_token},
@@ -226,6 +287,11 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
                 )
                 legacy_payload = legacy_dept_res.json() if legacy_dept_res.status_code < 400 else {}
                 dept_name = (legacy_payload.get("result") or {}).get("name")
+            
+            # 获取完整部门路径
+            full_department_path, root_department_name = _get_full_department_path(
+                client, dept_id, app_access_token
+            )
 
         conditions = [User.email == final_email]
         if unionid:
@@ -264,6 +330,8 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
                 mobile=mobile,
                 department_id=dept_id,
                 department_name=dept_name,
+                full_department_path=full_department_path,
+                root_department_name=root_department_name,
                 last_login_at=now,
                 is_active=True,
                 is_super_admin=is_super_admin,
@@ -282,6 +350,8 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
             user.mobile = mobile or user.mobile
             user.department_id = dept_id or user.department_id
             user.department_name = dept_name or user.department_name
+            user.full_department_path = full_department_path or user.full_department_path
+            user.root_department_name = root_department_name or user.root_department_name
             user.last_login_at = now
             # 如果是超级管理员邮箱，自动提升权限
             if is_super_admin:
@@ -306,6 +376,8 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
             "is_admin": user.is_admin,
             "is_super_admin": user.is_super_admin,
             "department_name": user.department_name,
+            "full_department_path": user.full_department_path,
+            "root_department_name": user.root_department_name,
             "is_active": user.is_active,
         },
     }

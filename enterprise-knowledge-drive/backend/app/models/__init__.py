@@ -9,3 +9,4 @@ from .folder_summary import FolderSummary
 from .rag_index import RagIndex, RagSource, SummaryChunk, RagIndexRelation
 from .agent_message import AgentMessage
 from .favorite import Favorite
+from .user_file_view import UserFileView

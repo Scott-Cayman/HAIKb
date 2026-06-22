@@ -16,6 +16,9 @@ class User(Base):
     email = Column(String, nullable=True)
     department_id = Column(String, nullable=True)
     department_name = Column(String, nullable=True)
+    # 完整部门路径信息
+    full_department_path = Column(String, nullable=True)  # 完整部门路径，如：跨界营销中心/第五事业部
+    root_department_name = Column(String, nullable=True)  # 根部门名称，用于大分类
     is_super_admin = Column(Boolean, default=False)
     is_admin = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)

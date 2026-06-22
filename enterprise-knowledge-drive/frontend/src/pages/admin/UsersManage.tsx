@@ -3,6 +3,23 @@ import { Plus, Trash2, Edit2, Shield, User, ShieldAlert, CheckCircle, XCircle, S
 import api from '../../services/api';
 import { useAuthStore, User as UserType } from '../../stores/authStore';
 
+// 从完整部门路径中提取二级部门（如"海口公司/跨界营销中心/第五事业部" → "跨界营销中心"）
+const getSecondLevelDepartment = (user: UserType): string => {
+  if (!user.full_department_path) {
+    return user.department_name || '-';
+  }
+  
+  const parts = user.full_department_path.split('/');
+  
+  // 如果路径至少有2部分，返回第二部分作为二级部门
+  if (parts.length >= 2) {
+    return parts[1];
+  }
+  
+  // 否则返回原部门名称
+  return user.department_name || '-';
+};
+
 interface CreateUserForm {
   name: string;
   username: string;
@@ -129,7 +146,10 @@ const UsersManage = () => {
     } else if (sortConfig.key === 'username') {
       comparison = naturalCollator.compare(a.username || '', b.username || '');
     } else {
-      comparison = naturalCollator.compare(a.department_name || '', b.department_name || '');
+      // 按二级部门排序
+      const deptA = getSecondLevelDepartment(a);
+      const deptB = getSecondLevelDepartment(b);
+      comparison = naturalCollator.compare(deptA, deptB);
     }
     
     return sortConfig.direction === 'asc' ? comparison : -comparison;
@@ -241,7 +261,12 @@ const UsersManage = () => {
                         className="w-full px-3 py-1 bg-slate-700 border border-slate-600 rounded text-white text-sm"
                       />
                     ) : (
-                      <span className="text-sm text-slate-300">{user.department_name || '-'}</span>
+                      <div>
+                        <div className="text-sm text-slate-300">{user.full_department_path || user.department_name || '-'}</div>
+                        {user.full_department_path && user.root_department_name && (
+                          <div className="text-xs text-slate-500 mt-1">根部门: {user.root_department_name}</div>
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="px-6 py-4">

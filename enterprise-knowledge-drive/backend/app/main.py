@@ -17,6 +17,7 @@ from app.models import (
     SummaryChunk,
     SystemSetting,
     User,
+    UserFileView,
 )
 from app.rag.index_manager import index_manager
 from app.routers import admin, agent, auth, favorites, files, folders, rag

@@ -19,6 +19,9 @@ class File(Base):
     summary_status = Column(String, default='pending')
     summary_error = Column(Text, nullable=True)
     uploaded_by = Column(Integer, ForeignKey('users.id'))
+    # 部门信息
+    department_name = Column(String, nullable=True)  # 创建者的部门名称（或继承自文件夹）
+    is_super_admin_created = Column(Boolean, default=False)  # 是否由超级管理员创建
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     is_deleted = Column(Boolean, default=False)

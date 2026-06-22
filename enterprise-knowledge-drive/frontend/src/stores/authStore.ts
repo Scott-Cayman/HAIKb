@@ -8,6 +8,8 @@ export interface User {
   is_admin: boolean;
   is_super_admin: boolean;
   department_name?: string;
+  full_department_path?: string;
+  root_department_name?: string;
   is_active: boolean;
   username?: string;
 }

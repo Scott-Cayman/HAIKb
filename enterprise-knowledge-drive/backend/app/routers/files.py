@@ -17,6 +17,7 @@ from app.dependencies.auth import get_current_user
 from app.models.file import File
 from app.models.folder import Folder
 from app.models.user import User
+from app.models.user_file_view import UserFileView
 from app.services.summary_index_service import generate_summary_and_index_task
 from app.services.folder_summary_service import folder_summary_service
 
@@ -295,6 +296,20 @@ async def upload_file(
     else:
         preview_path = None
 
+    # 确定文件的部门信息
+    department_name = None
+    is_super_admin_created = current_user.is_super_admin
+    
+    if target_folder_id:
+        # 如果文件在文件夹中，继承文件夹的部门信息
+        folder = db.query(Folder).filter(Folder.id == target_folder_id, Folder.is_deleted == False).first()
+        if folder:
+            department_name = folder.department_name
+            is_super_admin_created = folder.is_super_admin_created
+    else:
+        # 如果不在文件夹中（根目录），使用当前用户的具体部门信息
+        department_name = _get_user_specific_department(current_user)
+    
     db_file = File(
         folder_id=target_folder_id,
         original_name=file.filename,
@@ -307,6 +322,8 @@ async def upload_file(
         preview_status=preview_status,
         summary_status="pending",
         uploaded_by=current_user.id,
+        department_name=department_name,
+        is_super_admin_created=is_super_admin_created
     )
     db.add(db_file)
     db.commit()
@@ -320,15 +337,48 @@ async def upload_file(
     return db_file
 
 
+def _get_user_specific_department(user: User) -> Optional[str]:
+    """获取用户的具体部门（优先匹配 跨界营销中心、创意部 等关键部门）"""
+    if user.full_department_path:
+        if "跨界营销中心" in user.full_department_path:
+            return "跨界营销中心"
+        if "创意部" in user.full_department_path or "海口创意设计中心" in user.full_department_path:
+            return "创意部"
+    return user.department_name
+
+
+def _check_file_permission(file: File, current_user: User) -> bool:
+    """检查用户是否有访问文件的权限"""
+    if current_user.is_super_admin:
+        return True
+    # 普通用户检查
+    user_department = _get_user_specific_department(current_user)
+    return file.is_super_admin_created or file.department_name == user_department
+
+
 @router.get("/recent")
 def get_recent_files(limit: int = 10, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return (
+    query = (
         db.query(File)
         .outerjoin(Folder, Folder.id == File.folder_id)
         .filter(
             File.is_deleted == False,
             or_(File.folder_id == None, Folder.is_deleted == False),
         )
+    )
+    
+    # 权限检查
+    if not current_user.is_super_admin:
+        user_department = _get_user_specific_department(current_user)
+        query = query.filter(
+            or_(
+                File.is_super_admin_created == True,
+                File.department_name == user_department
+            )
+        )
+    
+    return (
+        query
         .order_by(File.created_at.desc())
         .limit(limit)
         .all()
@@ -340,6 +390,13 @@ def get_files_in_folder(folder_id: int, db: Session = Depends(get_db), current_u
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
+    
+    # 检查文件夹权限
+    # 复用文件夹权限检查逻辑
+    user_department = _get_user_specific_department(current_user)
+    if not current_user.is_super_admin and not folder.is_super_admin_created and folder.department_name != user_department:
+        raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
+    
     return db.query(File).filter(File.folder_id == folder_id, File.is_deleted == False).all()
 
 
@@ -348,6 +405,15 @@ def get_file(file_id: int, background_tasks: BackgroundTasks, db: Session = Depe
     file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    
+    # 权限检查
+    if not _check_file_permission(file, current_user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this file")
+
+    # 记录用户文件浏览
+    file_view = UserFileView(user_id=current_user.id, file_id=file_id)
+    db.add(file_view)
+    db.commit()
 
     if file.preview_status in ["failed", "unsupported"] and file.file_ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.pdf")
@@ -363,6 +429,10 @@ def download_file(file_id: int, db: Session = Depends(get_db), current_user: Use
     file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    
+    # 权限检查
+    if not _check_file_permission(file, current_user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
     file.download_count += 1
     db.commit()
@@ -374,6 +444,10 @@ def preview_file(file_id: int, db: Session = Depends(get_db), current_user: User
     file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    
+    # 权限检查
+    if not _check_file_permission(file, current_user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
     if file.preview_status != "success":
         raise HTTPException(status_code=400, detail="Preview not available")
@@ -389,6 +463,10 @@ def delete_file(file_id: int, db: Session = Depends(get_db), current_user: User 
     file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    
+    # 权限检查
+    if not _check_file_permission(file, current_user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
     file.is_deleted = True
     db.commit()

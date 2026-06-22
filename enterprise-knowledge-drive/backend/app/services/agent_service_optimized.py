@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
+from pathlib import Path
 from typing import List, Optional, Dict
 
 from app.database import SessionLocal
@@ -11,8 +13,17 @@ from app.rag.index_manager import index_manager
 from app.rag.tools import SummaryDocSearchTool
 from app.services.llm_service import llm_service
 
+# 加载公司 AI 工具信息
+COMPANY_AI_TOOLS_PATH = Path(__file__).parent / "company_ai_tools.md"
+COMPANY_AI_TOOLS_CONTENT = ""
+if COMPANY_AI_TOOLS_PATH.exists():
+    with open(COMPANY_AI_TOOLS_PATH, "r", encoding="utf-8") as f:
+        COMPANY_AI_TOOLS_CONTENT = f.read()
 
-SYSTEM_PROMPT = """你是 HAIKb 企业知识库 Agent，负责帮助用户从公司历史文件中找到可复用的项目资料、标书文件、投标方案和案例文件。
+
+# 构建系统提示词，包含公司 AI 工具信息
+def build_system_prompt():
+    base_prompt = """你是 HAIKb 企业知识库 Agent，负责帮助用户从公司历史文件中找到可复用的项目资料、标书文件、投标方案和案例文件。
 
 1. 你不能直接读取或检索原文件全文。
 2. 你只能基于系统提供的 AI_DOCUMENT_SUMMARY 总结文档回答。
@@ -22,6 +33,13 @@ SYSTEM_PROMPT = """你是 HAIKb 企业知识库 Agent，负责帮助用户从公
 6. 回答要尽可能详细、全面，不要过于简短，分点说明会更好。
 7. 不要编造不存在的文件、客户、项目、金额、评分标准。
 8. 如果没有找到高匹配文件，可以基于知识库给出相近建议，或说明知识库内容不足。"""
+    
+    if COMPANY_AI_TOOLS_CONTENT:
+        ai_tools_prompt = f"""\n\n---\n\n### 智海王潮公司 AI 工具体系\n\n{COMPANY_AI_TOOLS_CONTENT}\n\n---\n\n在回答用户问题时，优先使用上述智海王潮公司 AI 工具体系的信息回答相关问题。"""
+        return base_prompt + ai_tools_prompt
+    return base_prompt
+
+SYSTEM_PROMPT = build_system_prompt()
 
 
 class OptimizedAgentService:
@@ -168,8 +186,8 @@ class OptimizedAgentService:
                 f"下面是从 HAIKb 总结文档索引中检索到的证据。\n\n"
                 f"{evidence_text}\n\n"
                 f"推荐文件：\n{related_text}\n\n"
-                "请基于证据回答用户问题。"
-                "要求：1. 只基于证据回答，不要编造。"
+                "请基于以上信息回答用户问题。"
+                "要求：1. 只基于提供的信息回答，不要编造。"
                 "2. 如果证据不足，请明确说明，并基于自身理解给出参考建议。"
                 "3. 输出格式：先直接给出回答，再列出推荐文件（如果有），最后给出依据说明。"
                 "4. 不要使用'匹配结论'这样的标题。"

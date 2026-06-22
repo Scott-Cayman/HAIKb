@@ -1,8 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { useAuthStore } from '../stores/authStore';
+import { useAuthStore, User } from '../stores/authStore';
 import { Search, Folder, Clock, Star, Settings, LogOut, Cloud } from 'lucide-react';
 import api from '../services/api';
+
+// 从完整部门路径中提取二级部门
+const getSecondLevelDepartment = (user: User): string => {
+  if (!user.full_department_path) {
+    return user.department_name || '成员';
+  }
+  
+  const parts = user.full_department_path.split('/');
+  
+  if (parts.length >= 2) {
+    return parts[1];
+  }
+  
+  return user.department_name || '成员';
+};
 
 type TitleSearchItem = {
   id: number;
@@ -75,7 +90,7 @@ const MainLayout = () => {
   }, []);
 
   const navItems = [
-    { name: '公司资料', icon: Folder, path: '/' },
+    { name: '知识库', icon: Folder, path: '/' },
     { name: 'AI 检索', icon: Search, path: '/search' },
     { name: '最近访问', icon: Clock, path: '/recent' },
     { name: '我的收藏', icon: Star, path: '/favorites' },
@@ -120,7 +135,7 @@ const MainLayout = () => {
             </div>
             <div className="ml-3 flex-1 overflow-hidden">
               <p className="text-sm font-medium text-slate-900 truncate">{user?.name}</p>
-              <p className="text-xs text-slate-500 truncate">{user?.department_name || '成员'}</p>
+              <p className="text-xs text-slate-500 truncate">{user ? getSecondLevelDepartment(user) : '成员'}</p>
             </div>
           </div>
           

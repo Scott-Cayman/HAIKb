@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Folder, File, Users, Settings, ArrowLeft, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, Folder, BarChart3, Users, Settings, ArrowLeft, ShieldAlert } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 
 const AdminLayout = () => {
@@ -10,7 +10,7 @@ const AdminLayout = () => {
   const navItems = [
     { name: '仪表盘', icon: LayoutDashboard, path: '/admin', visible: true },
     { name: '文件夹管理', icon: Folder, path: '/admin/folders', visible: true },
-    { name: '文件管理', icon: File, path: '/admin/files', visible: true },
+    { name: '数据检测', icon: BarChart3, path: '/admin/usage-stats', visible: true },
     { name: '用户管理', icon: Users, path: '/admin/users', visible: isSuperAdmin },
     { name: '系统配置', icon: Settings, path: '/admin/settings', visible: true },
     { name: 'RAG 管理', icon: ShieldAlert, path: '/admin/rag', visible: true },

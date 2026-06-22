@@ -1,11 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timedelta
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from app.database import get_db
 from app.models.user import User
 from app.models.folder import Folder
 from app.models.file import File
+from app.models.agent_message import AgentMessage
+from app.models.user_file_view import UserFileView
 from app.dependencies.auth import get_current_super_admin, get_current_admin
 from app.routers.auth import get_password_hash
 
@@ -25,6 +29,39 @@ class UserUpdate(BaseModel):
 class RoleUpdate(BaseModel):
     is_admin: Optional[bool] = None
     is_super_admin: Optional[bool] = None
+
+
+class UserUsageStats(BaseModel):
+    id: int
+    name: str
+    department_name: Optional[str]
+    file_view_count: int
+    agent_chat_count: int
+    last_active: Optional[datetime]
+
+
+class UsageStatsResponse(BaseModel):
+    users: List[UserUsageStats]
+    total_users: int
+
+
+def _get_user_specific_department(user: User) -> Optional[str]:
+    """获取用户的具体部门（优先匹配 跨界营销中心、创意部 等关键部门）"""
+    if user.full_department_path:
+        if "跨界营销中心" in user.full_department_path:
+            return "跨界营销中心"
+        if "创意部" in user.full_department_path or "海口创意设计中心" in user.full_department_path:
+            return "创意部"
+    return user.department_name
+
+
+def _get_time_filter(time_range: str):
+    now = datetime.utcnow()
+    if time_range == "7d":
+        return now - timedelta(days=7)
+    elif time_range == "30d":
+        return now - timedelta(days=30)
+    return None
 
 @router.get("/dashboard")
 def get_dashboard(db: Session = Depends(get_db), current_admin: User = Depends(get_current_admin)):
@@ -139,3 +176,79 @@ def delete_user(user_id: int, db: Session = Depends(get_db), current_admin: User
     db.commit()
     
     return {"message": "User deleted"}
+
+
+@router.get("/usage-stats", response_model=UsageStatsResponse)
+def get_usage_stats(
+    time_range: str = Query("all", description="时间范围: all, 7d, 30d"),
+    db: Session = Depends(get_db), 
+    current_admin: User = Depends(get_current_admin)
+):
+    # 获取目标用户
+    query = db.query(User).filter(User.is_active == True)
+    
+    # 如果是部门管理员，只看同部门的普通用户
+    if not current_admin.is_super_admin:
+        admin_department = _get_user_specific_department(current_admin)
+        query = query.filter(
+            User.is_admin == False,
+            User.is_super_admin == False
+        )
+        if admin_department:
+            query = query.filter(
+                (User.department_name == admin_department) |
+                (User.full_department_path.contains(admin_department))
+            )
+    
+    users = query.all()
+    
+    # 构建时间过滤
+    time_filter = _get_time_filter(time_range)
+    
+    # 预处理数据统计
+    user_ids = [user.id for user in users] if users else []
+    
+    result_users = []
+    
+    for user in users:
+        # 文件浏览统计
+        file_view_query = db.query(func.count(UserFileView.id)).filter(UserFileView.user_id == user.id)
+        if time_filter:
+            file_view_query = file_view_query.filter(UserFileView.created_at >= time_filter)
+        file_view_count = file_view_query.scalar() or 0
+        
+        # Agent对话统计
+        agent_chat_query = db.query(func.count(AgentMessage.id)).filter(
+            AgentMessage.user_id == user.id,
+            AgentMessage.role == 'user'
+        )
+        if time_filter:
+            agent_chat_query = agent_chat_query.filter(AgentMessage.created_at >= time_filter)
+        agent_chat_count = agent_chat_query.scalar() or 0
+        
+        # 最后活跃时间
+        last_file_view = db.query(func.max(UserFileView.created_at)).filter(UserFileView.user_id == user.id).scalar()
+        last_agent_message = db.query(func.max(AgentMessage.created_at)).filter(AgentMessage.user_id == user.id).scalar()
+        
+        last_active = user.last_login_at
+        if last_file_view and (not last_active or last_file_view > last_active):
+            last_active = last_file_view
+        if last_agent_message and (not last_active or last_agent_message > last_active):
+            last_active = last_agent_message
+        
+        result_users.append(UserUsageStats(
+            id=user.id,
+            name=user.name,
+            department_name=_get_user_specific_department(user),
+            file_view_count=file_view_count,
+            agent_chat_count=agent_chat_count,
+            last_active=last_active
+        ))
+    
+    # 按浏览量排序
+    result_users.sort(key=lambda x: x.file_view_count, reverse=True)
+    
+    return UsageStatsResponse(
+        users=result_users,
+        total_users=len(result_users)
+    )

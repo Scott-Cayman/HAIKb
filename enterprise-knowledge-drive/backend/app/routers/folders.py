@@ -70,6 +70,18 @@ def _collect_descendant_folder_ids(db: Session, root_folder_id: int) -> List[int
     return collected
 
 
+def _get_user_specific_department(user: User) -> Optional[str]:
+    """获取用户的具体部门（优先匹配 跨界营销中心、创意部 等关键部门）"""
+    # 从完整部门路径中查找关键部门
+    if user.full_department_path:
+        if "跨界营销中心" in user.full_department_path:
+            return "跨界营销中心"
+        if "创意部" in user.full_department_path or "海口创意设计中心" in user.full_department_path:
+            return "创意部"
+    # 如果找不到关键部门，使用用户的部门名称
+    return user.department_name
+
+
 @router.get("", response_model=List[FolderResponse])
 def get_folders(parent_id: Optional[int] = None, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     query = db.query(Folder).filter(Folder.is_deleted == False)
@@ -77,6 +89,22 @@ def get_folders(parent_id: Optional[int] = None, db: Session = Depends(get_db), 
         query = query.filter(Folder.parent_id == parent_id)
     else:
         query = query.filter(Folder.parent_id == None)
+    
+    # 权限检查：
+    # 1. 超级管理员可以查看所有文件夹
+    # 2. 普通用户只能查看：
+    #    - 由超级管理员创建的文件夹（is_super_admin_created=True）
+    #    - 同部门用户创建的文件夹（department_name匹配）
+    if not current_user.is_super_admin:
+        user_department = _get_user_specific_department(current_user)
+        from sqlalchemy import or_
+        query = query.filter(
+            or_(
+                Folder.is_super_admin_created == True,
+                Folder.department_name == user_department
+            )
+        )
+    
     return query.all()
 
 @router.post("", response_model=FolderResponse)
@@ -95,11 +123,28 @@ def create_folder(
         if parent_folder and parent_folder.parent_id is not None:
             raise HTTPException(status_code=400, detail="Cannot create subfolder in a second-level folder")
     
+    # 确定部门信息：
+    # 如果是根文件夹（parent_id为None），使用当前用户的具体部门信息
+    # 如果是子文件夹，继承父文件夹的部门信息
+    department_name = None
+    is_super_admin_created = current_user.is_super_admin
+    
+    if folder.parent_id is None:
+        # 一级文件夹：使用当前用户的具体部门
+        department_name = _get_user_specific_department(current_user)
+    else:
+        # 子文件夹：继承父文件夹的部门信息
+        if parent_folder:
+            department_name = parent_folder.department_name
+            is_super_admin_created = parent_folder.is_super_admin_created
+    
     db_folder = Folder(
         name=folder.name,
         parent_id=folder.parent_id,
         description=folder.description,
-        created_by=current_user.id
+        created_by=current_user.id,
+        department_name=department_name,
+        is_super_admin_created=is_super_admin_created
     )
     db.add(db_folder)
     db.commit()
@@ -114,11 +159,23 @@ def create_folder(
     
     return db_folder
 
+def _check_folder_permission(folder: Folder, current_user: User) -> bool:
+    """检查用户是否有访问文件夹的权限"""
+    if current_user.is_super_admin:
+        return True
+    # 普通用户检查
+    user_department = _get_user_specific_department(current_user)
+    return folder.is_super_admin_created or folder.department_name == user_department
+
+
 @router.get("/{folder_id}", response_model=FolderResponse)
 def get_folder(folder_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
+    # 权限检查
+    if not _check_folder_permission(folder, current_user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
     return folder
 
 
@@ -127,6 +184,9 @@ def get_folder_summary(folder_id: int, db: Session = Depends(get_db), current_us
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
+    # 权限检查
+    if not _check_folder_permission(folder, current_user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
 
     summary = (
         db.query(FolderSummary)
@@ -150,6 +210,10 @@ def update_folder(folder_id: int, payload: FolderUpdate, db: Session = Depends(g
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
+    
+    # 权限检查
+    if not _check_folder_permission(folder, current_user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
 
     if payload.name is not None:
         new_name = payload.name.strip()
@@ -168,6 +232,10 @@ def delete_folder(folder_id: int, db: Session = Depends(get_db), current_user: U
     folder = db.query(Folder).filter(Folder.id == folder_id).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
+    
+    # 权限检查
+    if not _check_folder_permission(folder, current_user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
     
     folder_ids = _collect_descendant_folder_ids(db=db, root_folder_id=folder_id)
     db.query(Folder).filter(Folder.id.in_(folder_ids)).update({"is_deleted": True}, synchronize_session=False)
