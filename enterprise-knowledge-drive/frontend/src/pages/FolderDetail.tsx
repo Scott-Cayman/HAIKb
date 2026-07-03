@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, File, Upload, MoreVertical, CheckCircle, XCircle, Loader2, Folder, Grid, List, FileText, Image, Film, Music, Archive, PencilLine, Trash2, X } from 'lucide-react';
-import api from '../services/api';
+import api, { LONG_TIMEOUT } from '../services/api';
 import { ragApi, type BatchSummaryTaskResponse } from '../services/ragApi';
 import FavoriteButton from '../components/FavoriteButton';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
@@ -334,6 +334,7 @@ const FolderDetail = () => {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
+        timeout: LONG_TIMEOUT,
       });
 
       setUploadQueue(prev => prev.map(u => 

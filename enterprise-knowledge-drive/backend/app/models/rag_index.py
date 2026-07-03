@@ -1,6 +1,7 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, Text
 from sqlalchemy.sql import func
 from app.database import Base
+from app.models.types import AwareDateTime
 
 
 class RagIndex(Base):
@@ -11,8 +12,8 @@ class RagIndex(Base):
     index_type = Column(String, nullable=False, default='summary_file_index')
     config_json = Column(Text, nullable=True)
     status = Column(String, default='active')
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(AwareDateTime, server_default=func.now())
+    updated_at = Column(AwareDateTime, onupdate=func.now())
 
 
 class RagSource(Base):
@@ -27,8 +28,8 @@ class RagSource(Base):
     size = Column(Integer, default=0)
     note_json = Column(Text, nullable=True)
     status = Column(String, default='active')
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(AwareDateTime, server_default=func.now())
+    updated_at = Column(AwareDateTime, onupdate=func.now())
 
 
 class SummaryChunk(Base):
@@ -42,7 +43,7 @@ class SummaryChunk(Base):
     chunk_index = Column(Integer, default=0)
     content = Column(Text, nullable=False)
     metadata_json = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(AwareDateTime, server_default=func.now())
 
 
 class RagIndexRelation(Base):
@@ -53,4 +54,4 @@ class RagIndexRelation(Base):
     source_id = Column(String, ForeignKey('rag_sources.id'), nullable=False, index=True)
     target_id = Column(String, nullable=False, index=True)
     relation_type = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(AwareDateTime, server_default=func.now())

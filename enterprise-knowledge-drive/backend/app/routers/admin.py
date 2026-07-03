@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
@@ -56,7 +56,7 @@ def _get_user_specific_department(user: User) -> Optional[str]:
 
 
 def _get_time_filter(time_range: str):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if time_range == "7d":
         return now - timedelta(days=7)
     elif time_range == "30d":

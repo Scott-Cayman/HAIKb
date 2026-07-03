@@ -155,13 +155,7 @@ class FileUpdateRequest(BaseModel):
     original_name: Optional[str] = None
 
 
-@router.get("/title-search", response_model=TitleSearchResponse)
-def title_search(
-    q: str,
-    limit: int = 12,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
+def _internal_title_search(q: str, limit: int, db: Session, current_user: User) -> TitleSearchResponse:
     tokens = _two_char_tokens(q)
     if not tokens:
         return {"query": q, "tokens": [], "results": []}
@@ -206,6 +200,80 @@ def title_search(
 
     results.sort(key=lambda item: (item.hit_count, 1 if item.kind == "file" else 0, item.id), reverse=True)
     return {"query": q, "tokens": tokens, "results": results[: max(1, min(50, limit))]}
+
+
+@router.get("/title-search", response_model=TitleSearchResponse)
+def title_search(
+    q: str,
+    limit: int = 12,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _internal_title_search(q, limit, db, current_user)
+
+
+# 统一搜索响应模型
+class RelatedFileItem(BaseModel):
+    file_id: int
+    summary_id: int
+    original_name: str
+    one_line_judgement: str
+    score: float
+    preview_url: str
+    download_url: str
+
+
+class AgentEvidenceItem(BaseModel):
+    summary_id: int
+    file_id: int
+    chunk_id: str
+    content: str
+    score: float
+    file_name: Optional[str] = None
+
+
+class AgentAnswerItem(BaseModel):
+    conversation_id: str
+    answer: str
+    evidence: List[AgentEvidenceItem]
+    related_files: List[RelatedFileItem]
+
+
+class UnifiedSearchResponse(BaseModel):
+    query: str
+    agent: Optional[AgentAnswerItem] = None
+    keyword: Optional[TitleSearchResponse] = None
+    error: Optional[str] = None
+
+
+@router.get("/unified-search", response_model=UnifiedSearchResponse)
+def unified_search(
+    q: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.agent_service_optimized import agent_service
+
+    response = UnifiedSearchResponse(query=q)
+
+    try:
+        agent_result = agent_service.chat(
+            query=q,
+            top_k=8,
+            retrieval_mode="hybrid",
+            user_id=current_user.id,
+        )
+        response.agent = AgentAnswerItem(**agent_result)
+    except Exception as e:
+        response.error = str(e)
+
+    try:
+        keyword_result = _internal_title_search(q, 20, db, current_user)
+        response.keyword = keyword_result
+    except Exception as e:
+        response.error = str(e)
+
+    return response
 
 
 @router.patch("/{file_id}", response_model=FileResponseModel)

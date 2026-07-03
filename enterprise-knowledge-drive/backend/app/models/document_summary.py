@@ -1,6 +1,7 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text
 from sqlalchemy.sql import func
 from app.database import Base
+from app.models.types import AwareDateTime
 
 
 class DocumentSummary(Base):
@@ -24,6 +25,6 @@ class DocumentSummary(Base):
     parse_error = Column(Text, nullable=True)
     index_status = Column(String, default='pending')
     index_error = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(AwareDateTime, server_default=func.now())
+    updated_at = Column(AwareDateTime, onupdate=func.now())
     is_deleted = Column(Boolean, default=False)

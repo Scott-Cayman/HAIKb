@@ -16,3 +16,4 @@ easyocr==1.7.1
 pytesseract==0.3.13
 Pillow==10.3.0
 opencv-python-headless==4.9.0.80
+psutil~=5.9

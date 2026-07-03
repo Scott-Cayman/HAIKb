@@ -1,6 +1,7 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, Text
 from sqlalchemy.sql import func
 from app.database import Base
+from app.models.types import AwareDateTime
 
 
 class AgentMessage(Base):
@@ -12,4 +13,4 @@ class AgentMessage(Base):
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     metadata_json = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(AwareDateTime, server_default=func.now())

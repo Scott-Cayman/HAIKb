@@ -1,6 +1,17 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Folder, File, MoreVertical, LayoutGrid, List, Plus, PencilLine, Trash2, X } from 'lucide-react';
+import {
+  Folder,
+  File,
+  MoreVertical,
+  LayoutGrid,
+  List,
+  Plus,
+  PencilLine,
+  Trash2,
+  X,
+  Search
+} from 'lucide-react';
 import api from '../services/api';
 import FavoriteButton from '../components/FavoriteButton';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
@@ -21,6 +32,13 @@ interface FileType {
   created_at: string;
   folder_id: number;
 }
+
+type TitleSearchItem = {
+  id: number;
+  title: string;
+  kind: 'file' | 'folder';
+  hit_count: number;
+};
 
 const Home = () => {
   const navigate = useNavigate();
@@ -46,6 +64,58 @@ const Home = () => {
   });
   const fetchPromiseRef = useRef<Promise<void> | null>(null);
   const { favoriteFileIds, favoriteFolderIds, loadFavoriteStatus, toggleFileFavorite, toggleFolderFavorite } = useFavoriteStatus();
+
+  // 关键词检索相关状态
+  const [keyword, setKeyword] = useState('');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<TitleSearchItem[]>([]);
+  const headerSearchRef = useRef<HTMLDivElement | null>(null);
+  const normalizedKeyword = keyword.replace(/\s+/g, '');
+  const canSearch = normalizedKeyword.length >= 2;
+  const folderResults = searchResults.filter(item => item.kind === 'folder');
+  const fileResults = searchResults.filter(item => item.kind === 'file');
+
+  const runTitleSearch = async () => {
+    setSearchError(null);
+    setSearchOpen(true);
+
+    if (!canSearch) {
+      setSearchResults([]);
+      if (normalizedKeyword.length > 0) {
+        setSearchError('请输入至少两个连续字再检索标题');
+      }
+      return;
+    }
+
+    setSearchLoading(true);
+    try {
+      const response = await api.get<{ results: TitleSearchItem[] }>('/files/title-search', {
+        params: {
+          q: keyword,
+          limit: 16,
+        },
+      });
+      setSearchResults(response.data?.results || []);
+    } catch (err: any) {
+      setSearchResults([]);
+      setSearchError(err?.response?.data?.detail || err?.message || '关键词检索失败');
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      const node = headerSearchRef.current;
+      if (!node) return;
+      if (node.contains(event.target as Node)) return;
+      setSearchOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, []);
 
   const fetchFolders = async () => {
     try {
@@ -203,36 +273,145 @@ const Home = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">企业资料</h1>
-        <div className="flex items-center space-x-2 bg-slate-100 p-1 rounded-lg">
-          <button
-            type="button"
-            onClick={() => setViewMode('grid')}
-            onMouseDown={(e) => e.stopPropagation()}
-            className={`p-1.5 rounded-md transition-all ${
-              viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            <LayoutGrid className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('list')}
-            onMouseDown={(e) => e.stopPropagation()}
-            className={`p-1.5 rounded-md transition-all ${
-              viewMode === 'list' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'
-            }`}
-          >
-            <List className="w-4 h-4" />
-          </button>
+
+      {/* 企业资料区域 - 带关键词检索 */}
+      <div className="space-y-4">
+        {/* 标题 + 关键词搜索 + 视图切换 */}
+        <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">企业资料</h2>
+          
+          <div className="flex-1 max-w-xl">
+            <div ref={headerSearchRef} className="relative group">
+              <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+              <input
+                type="text"
+                value={keyword}
+                onChange={(e) => {
+                  setKeyword(e.target.value);
+                  if (!e.target.value.trim()) {
+                    setSearchResults([]);
+                    setSearchError(null);
+                    setSearchOpen(false);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    runTitleSearch();
+                  }
+                }}
+                placeholder="关键词检索（仅检索标题，至少两个连续字才显示）"
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 rounded-xl text-sm transition-all outline-none"
+              />
+
+              {searchOpen ? (
+                <div className="absolute left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20">
+                  <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                    <div className="text-xs text-slate-500">
+                      {searchLoading ? '检索中...' : canSearch ? '标题匹配结果' : '请输入至少两个连续字'}
+                    </div>
+                    <button
+                      onClick={() => setSearchOpen(false)}
+                      className="text-xs text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      关闭
+                    </button>
+                  </div>
+
+                  {searchError ? <div className="px-4 py-3 text-sm text-red-500">{searchError}</div> : null}
+
+                  {!searchLoading && !searchError && canSearch && folderResults.length === 0 && fileResults.length === 0 ? (
+                    <div className="px-4 py-4 text-sm text-slate-500">没有匹配到任何文件或文件夹标题。</div>
+                  ) : null}
+
+                  <div className="max-h-80 overflow-y-auto">
+                    {folderResults.length ? (
+                      <div className="px-4 py-3 border-t border-slate-50">
+                        <div className="text-xs text-slate-400 mb-2">文件夹</div>
+                        <div className="space-y-1">
+                          {folderResults.map(item => (
+                            <button
+                              key={`folder-${item.id}`}
+                              onClick={() => {
+                                setSearchOpen(false);
+                                navigate(`/folders/${item.id}`);
+                              }}
+                              className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors flex items-center justify-between"
+                            >
+                              <span className="text-sm text-slate-700 truncate">{item.title}</span>
+                              <span className="text-xs text-slate-400 ml-3 shrink-0">{item.hit_count}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {fileResults.length ? (
+                      <div className="px-4 py-3 border-t border-slate-50">
+                        <div className="text-xs text-slate-400 mb-2">文件</div>
+                        <div className="space-y-1">
+                          {fileResults.map(item => (
+                            <button
+                              key={`file-${item.id}`}
+                              onClick={() => {
+                                setSearchOpen(false);
+                                navigate(`/files/${item.id}`);
+                              }}
+                              className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors flex items-center justify-between"
+                            >
+                              <span className="text-sm text-slate-700 truncate">{item.title}</span>
+                              <span className="text-xs text-slate-400 ml-3 shrink-0">{item.hit_count}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={runTitleSearch}
+              disabled={searchLoading || !keyword.trim()}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium shadow-sm hover:shadow transition-all disabled:opacity-60"
+            >
+              关键词检索
+            </button>
+
+            <div className="flex items-center space-x-2 bg-slate-100 p-1 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setViewMode('grid')}
+                onMouseDown={(e) => e.stopPropagation()}
+                className={`p-1.5 rounded-md transition-all ${
+                  viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <LayoutGrid className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('list')}
+                onMouseDown={(e) => e.stopPropagation()}
+                className={`p-1.5 rounded-md transition-all ${
+                  viewMode === 'list' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <List className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
+      {/* 文件夹展示 */}
       {viewMode === 'grid' ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {sortedFolders.map(folder => (
-            <div 
+            <div
               key={folder.id}
               onClick={() => navigate(`/folders/${folder.id}`)}
               className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all group cursor-pointer"
@@ -302,18 +481,18 @@ const Home = () => {
           ))}
 
           {canEdit && !isCreatingFolder && (
-            <div 
+            <div
               onClick={() => setIsCreatingFolder(true)}
               className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col items-center justify-center group cursor-pointer border-dashed border-2 min-h-[140px]"
             >
               <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-3 group-hover:bg-blue-50 transition-colors">
-                <Plus className="w-6 h-6 text-slate-400 group-hover:text-blue-500 transition-colors" />
+                <Plus className="w-6 h-6 text-slate-400 group-hover:text-blue-500" />
               </div>
               <span className="text-sm font-medium text-slate-500 group-hover:text-blue-600 transition-colors">新建文件夹</span>
             </div>
           )}
           {canEdit && isCreatingFolder && (
-            <form 
+            <form
               onSubmit={handleCreateFolder}
               className="bg-white p-5 rounded-2xl border border-blue-200 shadow-sm transition-all flex flex-col justify-center min-h-[140px]"
             >
@@ -326,14 +505,14 @@ const Home = () => {
                 className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3 text-sm"
               />
               <div className="flex justify-end space-x-2">
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setIsCreatingFolder(false)}
                   className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
                 >
                   取消
                 </button>
-                <button 
+                <button
                   type="submit"
                   disabled={!newFolderName.trim()}
                   className="px-3 py-1.5 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded-md disabled:opacity-50 transition-colors"
@@ -387,21 +566,21 @@ const Home = () => {
           ) : null}
           {folders.length ? (
             <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50/50 border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400 font-semibold">
-                    <th className="p-4 font-medium cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFolderSort('name')}>
-                      名称 {folderSortConfig.key === 'name' && (folderSortConfig.direction === 'asc' ? '↑' : '↓')}
-                    </th>
-                    <th className="p-4 font-medium hidden md:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFolderSort('description')}>
-                      描述 {folderSortConfig.key === 'description' && (folderSortConfig.direction === 'asc' ? '↑' : '↓')}
-                    </th>
-                    <th className="p-4"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50 text-sm">
-                  {sortedFolders.map((folder, idx) => {
-                      const isLastItem = idx === sortedFolders.length - 1;
-                    return (
+              <thead>
+                <tr className="bg-slate-50/50 border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400 font-semibold">
+                  <th className="p-4 font-medium cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFolderSort('name')}>
+                    名称 {folderSortConfig.key === 'name' && (folderSortConfig.direction === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th className="p-4 font-medium hidden md:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleFolderSort('description')}>
+                    描述 {folderSortConfig.key === 'description' && (folderSortConfig.direction === 'asc' ? '↑' : '↓')}
+                  </th>
+                  <th className="p-4"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 text-sm">
+                {sortedFolders.map((folder, idx) => {
+                  const isLastItem = idx === sortedFolders.length - 1;
+                  return (
                     <tr key={folder.id} onClick={() => navigate(`/folders/${folder.id}`)} className="hover:bg-slate-50/50 transition-colors group cursor-pointer">
                       <td className="p-4">
                         <div className="flex items-center">
@@ -463,15 +642,17 @@ const Home = () => {
                         </div>
                       </td>
                     </tr>
-                  );})}
-                </tbody>
+                  );
+                })}
+              </tbody>
             </table>
           ) : (
             <div className="p-8 text-center text-slate-500">暂无文件夹</div>
           )}
         </div>
       )}
-      
+
+      {/* 最近更新的文件 */}
       <div className="pt-8">
         <h2 className="text-lg font-bold text-slate-800 mb-4">最近更新的文件</h2>
         <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
@@ -529,6 +710,7 @@ const Home = () => {
         </div>
       </div>
 
+      {/* 重命名对话框 */}
       {renameFolder ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onMouseDown={() => setRenameFolder(null)}>
           <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-xl" onMouseDown={(e) => e.stopPropagation()}>
@@ -574,6 +756,7 @@ const Home = () => {
         </div>
       ) : null}
 
+      {/* 删除对话框 */}
       {deleteFolder ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onMouseDown={() => setDeleteFolder(null)}>
           <div className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-xl" onMouseDown={(e) => e.stopPropagation()}>

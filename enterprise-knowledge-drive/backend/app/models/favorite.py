@@ -1,7 +1,8 @@
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.sql import func
 
 from app.database import Base
+from app.models.types import AwareDateTime
 
 
 class Favorite(Base):
@@ -11,7 +12,7 @@ class Favorite(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     file_id = Column(Integer, ForeignKey("files.id"), nullable=True, index=True)
     folder_id = Column(Integer, ForeignKey("folders.id"), nullable=True, index=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column(AwareDateTime, server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("user_id", "file_id", name="uq_favorites_user_file"),

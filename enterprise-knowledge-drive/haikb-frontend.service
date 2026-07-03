@@ -1,0 +1,17 @@
+[Unit]
+Description=HAIKB Frontend Service
+After=network.target haikb-backend.service
+Wants=haikb-backend.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/HAIKB/enterprise-knowledge-drive/frontend
+ExecStart=/home/HAIKB/enterprise-knowledge-drive/frontend/node_modules/.bin/vite --host 0.0.0.0 --port 5180
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/HAIKB/enterprise-knowledge-drive/logs/frontend/stdout.log
+StandardError=append:/home/HAIKB/enterprise-knowledge-drive/logs/frontend/stderr.log
+
+[Install]
+WantedBy=multi-user.target

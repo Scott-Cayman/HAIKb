@@ -18,6 +18,7 @@ export default defineConfig({
     hmr: {
       clientPort: 5180,
       host: '113.59.125.17',
+      protocol: 'ws',
     },
   },
   optimizeDeps: {

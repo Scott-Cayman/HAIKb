@@ -1,0 +1,10 @@
+[Unit]
+Description=Run HAIKB Daily Status Report every day
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+Unit=haikb-daily-report.service
+
+[Install]
+WantedBy=timers.target

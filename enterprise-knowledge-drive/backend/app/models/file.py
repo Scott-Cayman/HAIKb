@@ -1,6 +1,7 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text
 from sqlalchemy.sql import func
 from app.database import Base
+from app.models.types import AwareDateTime
 
 
 class File(Base):
@@ -22,8 +23,8 @@ class File(Base):
     # 部门信息
     department_name = Column(String, nullable=True)  # 创建者的部门名称（或继承自文件夹）
     is_super_admin_created = Column(Boolean, default=False)  # 是否由超级管理员创建
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(AwareDateTime, server_default=func.now())
+    updated_at = Column(AwareDateTime, onupdate=func.now())
     is_deleted = Column(Boolean, default=False)
     download_count = Column(Integer, default=0)
     view_count = Column(Integer, default=0)

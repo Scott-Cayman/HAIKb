@@ -1,0 +1,17 @@
+[Unit]
+Description=HAIKB Daily Status Report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/HAIKB/enterprise-knowledge-drive/backend
+EnvironmentFile=-/home/HAIKB/enterprise-knowledge-drive/.env
+EnvironmentFile=-/home/HAIKB/enterprise-knowledge-drive/backend/.env
+ExecStart=/home/HAIKB/enterprise-knowledge-drive/backend/.venv/bin/python /home/HAIKB/enterprise-knowledge-drive/backend/scripts/daily_report.py
+TimeoutStartSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
