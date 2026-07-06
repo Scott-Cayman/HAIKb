@@ -1,3 +1,4 @@
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -135,6 +136,85 @@ def convert_to_pdf(storage_path: str, preview_path: str, file_ext: str, file_id:
         if db_file:
             db_file.preview_status = "failed"
             db.commit()
+        db.close()
+
+
+def _detect_video_codec_tag(file_path: str) -> Optional[str]:
+    try:
+        with open(file_path, "rb") as f:
+            head = f.read(2 * 1024 * 1024)
+            try:
+                size = os.path.getsize(file_path)
+            except Exception:
+                size = 0
+            tail = b""
+            if size and size > 2 * 1024 * 1024:
+                try:
+                    f.seek(max(0, size - 2 * 1024 * 1024))
+                    tail = f.read(2 * 1024 * 1024)
+                except Exception:
+                    tail = b""
+    except Exception:
+        return None
+
+    data = head + tail
+    for tag in (b"hvc1", b"hev1", b"avc1", b"av01", b"vp09"):
+        if tag in data:
+            return tag.decode("ascii", errors="ignore")
+    return None
+
+
+def transcode_video_to_h264(storage_path: str, preview_path: str, file_id: int):
+    db = SessionLocal()
+    try:
+        ffmpeg_cmd = shutil.which("ffmpeg")
+        if not ffmpeg_cmd:
+            raise RuntimeError("ffmpeg not found")
+
+        output_dir = Path(preview_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            ffmpeg_cmd,
+            "-y",
+            "-i",
+            storage_path,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            preview_path,
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60 * 60)
+
+        db_file = db.query(File).filter(File.id == file_id).first()
+        if result.returncode == 0 and os.path.exists(preview_path) and os.path.getsize(preview_path) > 0:
+            if db_file:
+                db_file.preview_status = "success"
+                db_file.preview_path = preview_path
+        else:
+            if os.path.exists(preview_path):
+                try:
+                    os.remove(preview_path)
+                except Exception:
+                    pass
+            if db_file:
+                db_file.preview_status = "failed"
+        db.commit()
+    except Exception:
+        db_file = db.query(File).filter(File.id == file_id).first()
+        if db_file:
+            db_file.preview_status = "failed"
+            db.commit()
+    finally:
         db.close()
 
 
@@ -355,15 +435,20 @@ async def upload_file(
         shutil.copyfileobj(file.file, buffer)
 
     size = os.path.getsize(storage_path)
-    # 视频格式：浏览器可直接播放，无需转换
+    # 视频格式：大多数浏览器可直接播放；HEVC(H.265) 需要转码为 H.264 才能兼容
     VIDEO_EXTS = {".mp4", ".webm", ".ogg", ".mov"}
     preview_status = "unsupported"
     if ext in [".pdf", ".jpg", ".jpeg", ".png", ".webp"]:
         preview_status = "success"
         preview_path = storage_path
     elif ext in VIDEO_EXTS:
-        preview_status = "success"
-        preview_path = storage_path
+        codec_tag = _detect_video_codec_tag(storage_path) if ext in {".mp4", ".mov"} else None
+        if codec_tag in {"hvc1", "hev1"}:
+            preview_status = "pending"
+            preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.mp4")
+        else:
+            preview_status = "success"
+            preview_path = storage_path
     elif ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_status = "pending"
         preview_path = None
@@ -403,9 +488,12 @@ async def upload_file(
     db.commit()
     db.refresh(db_file)
 
-    if preview_status == "pending":
+    if preview_status == "pending" and ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.pdf")
         background_tasks.add_task(convert_to_pdf, storage_path, preview_path, ext, db_file.id)
+
+    if preview_status == "pending" and ext in VIDEO_EXTS and db_file.preview_path:
+        background_tasks.add_task(transcode_video_to_h264, storage_path, db_file.preview_path, db_file.id)
 
     background_tasks.add_task(generate_summary_and_index_task, db_file.id)
     return db_file
@@ -496,6 +584,20 @@ def get_file(file_id: int, background_tasks: BackgroundTasks, db: Session = Depe
         file.preview_path = file.storage_path
         db.commit()
 
+    if (
+        file.preview_status == "success"
+        and file.file_ext in VIDEO_EXTS_SET
+        and (not file.preview_path or file.preview_path == file.storage_path)
+        and file.file_ext in {".mp4", ".mov"}
+    ):
+        codec_tag = _detect_video_codec_tag(file.storage_path)
+        if codec_tag in {"hvc1", "hev1"}:
+            video_preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.mp4")
+            file.preview_status = "pending"
+            file.preview_path = video_preview_path
+            db.commit()
+            background_tasks.add_task(transcode_video_to_h264, file.storage_path, video_preview_path, file.id)
+
     if file.preview_status in ["failed", "unsupported"] and file.file_ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.pdf")
         file.preview_status = "pending"
@@ -561,12 +663,13 @@ def stream_file(file_id: int, token: str, request: Request, db: Session = Depend
     if not _check_file_permission(file, user):
         raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
-    file_path = os.path.abspath(file.preview_path if file.preview_path else file.storage_path)
+    path_to_serve = file.preview_path if file.preview_status == "success" and file.preview_path else file.storage_path
+    file_path = os.path.abspath(path_to_serve)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="File not found on disk")
 
     file_size = os.path.getsize(file_path)
-    media_type = file.mime_type or "video/mp4"
+    media_type = mimetypes.guess_type(file_path)[0] or file.mime_type or "video/mp4"
 
     # 解析 Range 请求头（浏览器视频播放器必须通过 Range 请求实现拖动进度条）
     range_header = request.headers.get("range")
@@ -595,6 +698,7 @@ def stream_file(file_id: int, token: str, request: Request, db: Session = Depend
             "Content-Range": f"bytes {start}-{end}/{file_size}",
             "Accept-Ranges": "bytes",
             "Content-Length": str(content_length),
+            "Content-Type": media_type,
         }
         return StreamingResponse(
             iterfile(), status_code=206, headers=headers, media_type=media_type
@@ -609,6 +713,7 @@ def stream_file(file_id: int, token: str, request: Request, db: Session = Depend
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(file_size),
+        "Content-Type": media_type,
     }
     return StreamingResponse(
         iterfile_full(), headers=headers, media_type=media_type
