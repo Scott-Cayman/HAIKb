@@ -108,6 +108,12 @@ export const ragApi = {
     const response = await api.put<FileSummaryResponse>(`/rag/files/${fileId}/tags`, payload);
     return response.data;
   },
+  saveManualSummary: async (fileId: number, summaryText: string) => {
+    const response = await api.post<FileSummaryResponse>(`/rag/files/${fileId}/manual-summary`, {
+      summary_text: summaryText,
+    });
+    return response.data;
+  },
   reindexSummary: async (fileId: number) => {
     const response = await api.post(`/rag/files/${fileId}/reindex-summary`, {}, {
       timeout: LONG_TIMEOUT

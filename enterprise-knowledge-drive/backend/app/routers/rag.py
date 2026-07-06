@@ -16,10 +16,15 @@ from app.models.rag_index import RagIndex, RagSource, SummaryChunk
 from app.models.user import User
 from app.rag.index_manager import index_manager
 from app.services.batch_summary_service import batch_summary_service
+from app.services.summary_generator import summary_generator_service
 from app.services.summary_index_service import summary_index_service
 
 
 router = APIRouter()
+
+
+class ManualSummaryRequest(BaseModel):
+    summary_text: str
 
 
 class SummaryTagUpdateRequest(BaseModel):
@@ -178,6 +183,127 @@ def reindex_summary(file_id: int, background_tasks: BackgroundTasks, db: Session
     
     background_tasks.add_task(summary_index_service.reindex_summary, file_id)
     return {"file_id": file_id, "status": "processing", "message": "Reindexing started in background"}
+
+
+@router.post("/files/{file_id}/manual-summary")
+def save_manual_summary(
+    file_id: int,
+    payload: ManualSummaryRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """手动保存总结（用于视频等不支持自动解析的格式）"""
+    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not payload.summary_text.strip():
+        raise HTTPException(status_code=400, detail="总结内容不能为空")
+
+    # 将用户输入包装成标准 summary markdown 格式
+    markdown = f"""# AI_DOCUMENT_SUMMARY
+
+## 0. 机器可读元数据
+- file_id: {file.id}
+- original_name: {file.original_name}
+- document_type: 手动总结
+- parse_scope: manual
+- parse_pages: 0
+- parse_confidence: manual
+
+## 1. 文件一句话判断
+{payload.summary_text.strip().splitlines()[0][:200]}
+
+## 2. 两句话简介
+{payload.summary_text.strip()}
+
+## 3. 标签
+- 客户类型：未识别
+- 项目类型：未识别
+- 文件类型：手动总结
+- 行业标签：[]
+- 区域标签：[]
+- 关键词标签：[]
+
+## 4. 重要信息摘要
+（由用户手动填写，见上方简介）
+
+## 5. 可复用价值
+该文件包含用户手动编写的总结，可用于企业知识检索。
+
+## 6. 适合被以下问题检索到
+- 查找 {file.original_name}
+
+## 7. 检索关键词扩展
+{file.original_name}
+
+## 8. 解析限制
+本总结由用户手动编写，未经 AI 自动解析。
+"""
+
+    # 写入磁盘
+    summary_file_path = summary_index_service._write_summary_markdown(file.id, markdown)
+
+    # 提取结构化字段
+    fields = summary_generator_service.extract_structured_fields(markdown)
+
+    # 更新或创建 DocumentSummary 记录
+    summary = db.query(DocumentSummary).filter(DocumentSummary.file_id == file.id).first()
+    if not summary:
+        summary = DocumentSummary(file_id=file.id, summary_markdown="")
+        db.add(summary)
+        db.flush()
+
+    summary.summary_markdown = markdown
+    summary.summary_file_path = str(summary_file_path)
+    summary.one_line_judgement = fields.get("one_line_judgement")
+    summary.two_sentence_intro = fields.get("two_sentence_intro")
+    summary.client_type = fields.get("client_type")
+    summary.project_type = fields.get("project_type")
+    summary.document_type = fields.get("document_type")
+    summary.region_tags = fields.get("region_tags")
+    summary.industry_tags = fields.get("industry_tags")
+    summary.keyword_tags = fields.get("keyword_tags")
+    summary.parse_pages = 0
+    summary.parse_status = "manual"
+    summary.parse_confidence = "manual"
+    summary.parse_error = None
+    summary.index_status = "pending"
+    summary.index_error = None
+    db.commit()
+    db.refresh(summary)
+
+    # 更新文件状态
+    file.summary_status = "success"
+    file.summary_error = None
+    db.commit()
+
+    summary_id = summary.id
+
+    # 后台索引
+    def _index_task():
+        from app.database import SessionLocal as SL
+        try:
+            index = index_manager.get_default_index()
+            pipeline = index.get_indexing_pipeline(settings={"retrieval_mode": "hybrid"})
+            pipeline.run(summary_id, reindex=True)
+        except Exception as exc:
+            with SL() as bg_db:
+                bg_summary = bg_db.query(DocumentSummary).filter(DocumentSummary.id == summary_id).first()
+                if bg_summary:
+                    bg_summary.index_status = "failed"
+                    bg_summary.index_error = str(exc)
+                    bg_db.commit()
+
+    background_tasks.add_task(_index_task)
+
+    return {
+        "file_id": file.id,
+        "summary_status": file.summary_status,
+        "summary_error": file.summary_error,
+        "summary": summary,
+    }
 
 
 @router.get("/status")

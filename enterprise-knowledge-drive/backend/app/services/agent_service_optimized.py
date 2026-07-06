@@ -20,8 +20,15 @@ if COMPANY_AI_TOOLS_PATH.exists():
     with open(COMPANY_AI_TOOLS_PATH, "r", encoding="utf-8") as f:
         COMPANY_AI_TOOLS_CONTENT = f.read()
 
+# 加载公司运营指南（常见问题汇总）
+COMPANY_OPS_GUIDE_PATH = Path(__file__).parent / "company_operations_guide.md"
+COMPANY_OPS_GUIDE_CONTENT = ""
+if COMPANY_OPS_GUIDE_PATH.exists():
+    with open(COMPANY_OPS_GUIDE_PATH, "r", encoding="utf-8") as f:
+        COMPANY_OPS_GUIDE_CONTENT = f.read()
 
-# 构建系统提示词，包含公司 AI 工具信息
+
+# 构建系统提示词，包含公司 AI 工具信息和运营指南
 def build_system_prompt():
     base_prompt = """你是 HAIKb 企业知识库 Agent，负责帮助用户从公司历史文件中找到可复用的项目资料、标书文件、投标方案和案例文件。
 
@@ -34,9 +41,28 @@ def build_system_prompt():
 7. 不要编造不存在的文件、客户、项目、金额、评分标准。
 8. 如果没有找到高匹配文件，可以基于知识库给出相近建议，或说明知识库内容不足。"""
     
+    # 追加公司运营指南上下文
+    if COMPANY_OPS_GUIDE_CONTENT:
+        base_prompt += (
+            f"\n\n---\n\n"
+            f"### 公司运营指南（常见问题与操作流程）\n\n"
+            f"{COMPANY_OPS_GUIDE_CONTENT}\n\n"
+            f"---\n\n"
+            f"当用户咨询考勤、行政、财务、运营流程、入职适应、团队协作、业务技能等公司内部问题时，"
+            f"必须优先查阅上述公司运营指南。如果指南中有对应答案，直接引用回答；"
+            f"如果指南未覆盖，再结合知识库文件回答，并标注信息来源。"
+        )
+
+    # 追加公司 AI 工具信息上下文
     if COMPANY_AI_TOOLS_CONTENT:
-        ai_tools_prompt = f"""\n\n---\n\n### 智海王潮公司 AI 工具体系\n\n{COMPANY_AI_TOOLS_CONTENT}\n\n---\n\n在回答用户问题时，优先使用上述智海王潮公司 AI 工具体系的信息回答相关问题。"""
-        return base_prompt + ai_tools_prompt
+        base_prompt += (
+            f"\n\n---\n\n"
+            f"### 智海王潮公司 AI 工具体系\n\n"
+            f"{COMPANY_AI_TOOLS_CONTENT}\n\n"
+            f"---\n\n"
+            f"在回答用户问题时，优先使用上述智海王潮公司 AI 工具体系的信息回答相关问题。"
+        )
+
     return base_prompt
 
 SYSTEM_PROMPT = build_system_prompt()
@@ -186,11 +212,16 @@ class OptimizedAgentService:
                 f"下面是从 HAIKb 总结文档索引中检索到的证据。\n\n"
                 f"{evidence_text}\n\n"
                 f"推荐文件：\n{related_text}\n\n"
-                "请基于以上信息回答用户问题。"
-                "要求：1. 只基于提供的信息回答，不要编造。"
-                "2. 如果证据不足，请明确说明，并基于自身理解给出参考建议。"
-                "3. 输出格式：先直接给出回答，再列出推荐文件（如果有），最后给出依据说明。"
-                "4. 不要使用'匹配结论'这样的标题。"
+                "请综合以下信息回答用户问题：\n"
+                "- 系统提示词中的公司运营指南（考勤、行政、财务、入职、团队协作、业务技能等）\n"
+                "- 系统提示词中的公司 AI 工具体系信息\n"
+                "- 上述 RAG 检索到的文档证据\n\n"
+                "要求：\n"
+                "1. 当问题涉及公司内部制度、流程、工作方法时，优先引用系统提示词中的运营指南内容，再结合 RAG 证据补充。\n"
+                "2. 不要编造不存在的信息。\n"
+                "3. 如果证据不足，请明确说明，并基于自身理解给出参考建议。\n"
+                "4. 输出格式：先直接给出回答，再列出推荐文件（如果有），最后给出依据说明。\n"
+                "5. 不要使用'匹配结论'这样的标题。"
             )
             try:
                 return llm_service.chat(

@@ -5,14 +5,15 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File as FastAPIFile, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File as FastAPIFile, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal, get_db
+from jose import JWTError, jwt as jose_jwt
 from app.dependencies.auth import get_current_user
 from app.models.file import File
 from app.models.folder import Folder
@@ -354,8 +355,13 @@ async def upload_file(
         shutil.copyfileobj(file.file, buffer)
 
     size = os.path.getsize(storage_path)
+    # 视频格式：浏览器可直接播放，无需转换
+    VIDEO_EXTS = {".mp4", ".webm", ".ogg", ".mov"}
     preview_status = "unsupported"
     if ext in [".pdf", ".jpg", ".jpeg", ".png", ".webp"]:
+        preview_status = "success"
+        preview_path = storage_path
+    elif ext in VIDEO_EXTS:
         preview_status = "success"
         preview_path = storage_path
     elif ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
@@ -483,6 +489,13 @@ def get_file(file_id: int, background_tasks: BackgroundTasks, db: Session = Depe
     db.add(file_view)
     db.commit()
 
+    # 视频文件：旧数据 preview_status 可能为 "unsupported"，直接修正为 "success"（无需转换）
+    VIDEO_EXTS_SET = {".mp4", ".webm", ".ogg", ".mov"}
+    if file.preview_status in ["failed", "unsupported"] and file.file_ext in VIDEO_EXTS_SET:
+        file.preview_status = "success"
+        file.preview_path = file.storage_path
+        db.commit()
+
     if file.preview_status in ["failed", "unsupported"] and file.file_ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.pdf")
         file.preview_status = "pending"
@@ -524,6 +537,82 @@ def preview_file(file_id: int, db: Session = Depends(get_db), current_user: User
     db.commit()
     path_to_serve = file.preview_path if file.preview_path else file.storage_path
     return FileResponse(path=path_to_serve)
+
+
+# 视频流式播放接口：支持 HTTP Range 请求（206 Partial Content），实现视频拖动进度条
+@router.get("/{file_id}/stream")
+def stream_file(file_id: int, token: str, request: Request, db: Session = Depends(get_db)):
+    # 手动校验 JWT token（<video> 标签无法设置自定义请求头，所以通过 query 参数传递）
+    try:
+        payload = jose_jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        user_id: str = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        if not user or not user.is_active:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if not _check_file_permission(file, user):
+        raise HTTPException(status_code=403, detail="You don't have permission to access this file")
+
+    file_path = os.path.abspath(file.preview_path if file.preview_path else file.storage_path)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    file_size = os.path.getsize(file_path)
+    media_type = file.mime_type or "video/mp4"
+
+    # 解析 Range 请求头（浏览器视频播放器必须通过 Range 请求实现拖动进度条）
+    range_header = request.headers.get("range")
+    if range_header:
+        # 解析 "bytes=start-end" 格式
+        range_match = range_header.replace("bytes=", "").split("-")
+        start = int(range_match[0]) if range_match[0] else 0
+        end = int(range_match[1]) if range_match[1] else file_size - 1
+        end = min(end, file_size - 1)
+        content_length = end - start + 1
+
+        # 分块读取指定范围的字节，避免一次性加载整个视频到内存
+        def iterfile():
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk_size = min(8192, remaining)
+                    data = f.read(chunk_size)
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+        }
+        return StreamingResponse(
+            iterfile(), status_code=206, headers=headers, media_type=media_type
+        )
+
+    # 无 Range 请求：返回完整文件
+    def iterfile_full():
+        with open(file_path, "rb") as f:
+            while chunk := f.read(8192):
+                yield chunk
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(file_size),
+    }
+    return StreamingResponse(
+        iterfile_full(), headers=headers, media_type=media_type
+    )
 
 
 @router.delete("/{file_id}")

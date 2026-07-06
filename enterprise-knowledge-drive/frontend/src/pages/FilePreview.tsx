@@ -11,6 +11,7 @@ import {
   RefreshCcw,
   Rows,
   Columns,
+  Save,
   ZoomIn,
   ZoomOut,
   ChevronLeft,
@@ -21,6 +22,7 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
 import api from '../services/api';
+import { API_BASE_URL } from '../services/backendConfig';
 import FavoriteButton from '../components/FavoriteButton';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
 import { ragApi } from '../services/ragApi';
@@ -168,6 +170,29 @@ const ImageViewer = ({ url, alt }: { url: string; alt: string }) => {
           onLoad={() => setImageLoaded(true)}
         />
       </div>
+    </div>
+  );
+};
+
+// 视频扩展名集合，用于判断是否走流式播放
+const VIDEO_EXTS = new Set(['.mp4', '.webm', '.ogg', '.mov']);
+
+// 视频播放器组件：使用浏览器原生 <video> 标签，通过流式接口加载，支持拖动进度条
+const VideoPlayer = ({ fileId }: { fileId: number }) => {
+  const token = localStorage.getItem('token') || '';
+  // 构建带 token 的流式播放 URL（<video> 标签无法设置自定义请求头）
+  const streamUrl = `${API_BASE_URL}/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
+
+  return (
+    <div className="flex items-center justify-center h-full bg-black rounded-xl overflow-hidden">
+      <video
+        src={streamUrl}
+        controls
+        className="max-w-full max-h-full"
+        preload="metadata"
+      >
+        您的浏览器不支持视频播放
+      </video>
     </div>
   );
 };
@@ -428,6 +453,9 @@ const FilePreview = () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [summaryData, setSummaryData] = useState<any>(null);
   const [summaryActionLoading, setSummaryActionLoading] = useState(false);
+  const [manualSummaryOpen, setManualSummaryOpen] = useState(false);
+  const [manualSummaryText, setManualSummaryText] = useState('');
+  const [manualSummarySaving, setManualSummarySaving] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
   const [tagSaving, setTagSaving] = useState(false);
   const [tagDraft, setTagDraft] = useState({
@@ -488,7 +516,9 @@ const FilePreview = () => {
         }
 
         setPreviewUrl(currentPreviewUrl => {
-          if (fileResponse.data.preview_status === 'success' && !currentPreviewUrl) {
+          // 视频文件通过流式接口直接播放，不走 blob 下载（避免将整个视频加载到内存）
+          const isVideoFile = VIDEO_EXTS.has(fileResponse.data.file_ext);
+          if (fileResponse.data.preview_status === 'success' && !currentPreviewUrl && !isVideoFile) {
             api.get(`/files/${id}/preview`, { responseType: 'blob' }).then(blobResponse => {
               if (!isMounted) return;
               const url = window.URL.createObjectURL(new Blob([blobResponse.data]));
@@ -584,6 +614,24 @@ const FilePreview = () => {
     }
   };
 
+  // 保存手动编写的总结（用于视频等不支持自动解析的格式）
+  const handleSaveManualSummary = async () => {
+    if (!id || !manualSummaryText.trim()) return;
+    setManualSummarySaving(true);
+    setSummaryLoading(true);
+    try {
+      await ragApi.saveManualSummary(Number(id), manualSummaryText.trim());
+      setManualSummaryOpen(false);
+      setManualSummaryText('');
+      setPollTrigger(p => p + 1);
+    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      alert((err as any)?.response?.data?.detail || '保存失败');
+    } finally {
+      setManualSummarySaving(false);
+    }
+  };
+
   const renderPreview = () => {
     if (!file) return null;
 
@@ -614,7 +662,12 @@ const FilePreview = () => {
       );
     }
 
-    if (file.preview_status === 'success' && previewUrl) {
+    if (file.preview_status === 'success') {
+      // 视频文件：直接流式播放，不依赖 previewUrl（blob）
+      if (VIDEO_EXTS.has(file.file_ext)) {
+        return <VideoPlayer fileId={file.id} />;
+      }
+      if (!previewUrl) return null;
       const isImage = ['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(file.file_ext);
       if (isImage) {
         return <ImageViewer url={previewUrl} alt={file.original_name} />;
@@ -877,6 +930,49 @@ const FilePreview = () => {
             <div className="space-y-3">
               <p className="text-sm text-slate-500">AI 总结暂未生成。</p>
               {summaryData?.summary_error ? <p className="text-sm text-red-500">{summaryData.summary_error}</p> : null}
+
+              {/* 手动编写总结（用于视频等不支持自动解析的格式） */}
+              {isAdmin && !manualSummaryOpen && (
+                <button
+                  onClick={() => setManualSummaryOpen(true)}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 text-sm transition-colors"
+                >
+                  <Save className="w-4 h-4" />
+                  手动编写总结
+                </button>
+              )}
+
+              {manualSummaryOpen && (
+                <div className="space-y-3">
+                  <div className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">
+                    该文件格式不支持 AI 自动解析，您可以手动编写总结内容，保存后将自动被索引用于 AI 检索。
+                  </div>
+                  <textarea
+                    value={manualSummaryText}
+                    onChange={(e) => setManualSummaryText(e.target.value)}
+                    placeholder="请输入该文件的总结内容，例如：这是一段关于 XX 项目的会议录像，主要讨论了项目进度和交付要求..."
+                    rows={6}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 text-sm resize-y"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleSaveManualSummary}
+                      disabled={manualSummarySaving || !manualSummaryText.trim()}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm transition-colors disabled:opacity-60"
+                    >
+                      {manualSummarySaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      {manualSummarySaving ? '保存中...' : '保存并索引'}
+                    </button>
+                    <button
+                      onClick={() => { setManualSummaryOpen(false); setManualSummaryText(''); }}
+                      disabled={manualSummarySaving}
+                      className="inline-flex items-center px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm transition-colors disabled:opacity-60"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </aside>
