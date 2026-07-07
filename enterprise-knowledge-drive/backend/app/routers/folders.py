@@ -24,6 +24,7 @@ class FolderCreate(BaseModel):
 class FolderUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    cover_url: Optional[str] = None
 
 class FolderResponse(BaseModel):
     id: int
@@ -215,13 +216,17 @@ def update_folder(folder_id: int, payload: FolderUpdate, db: Session = Depends(g
     if not _check_folder_permission(folder, current_user):
         raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
 
-    if payload.name is not None:
-        new_name = payload.name.strip()
+    payload_fields = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
+
+    if "name" in payload_fields:
+        new_name = (payload.name or "").strip()
         if not new_name:
             raise HTTPException(status_code=400, detail="name required")
         folder.name = new_name
-    if payload.description is not None:
-        folder.description = payload.description
+    if "description" in payload_fields:
+        folder.description = payload.description.strip() if payload.description else None
+    if "cover_url" in payload_fields:
+        folder.cover_url = payload.cover_url.strip() if payload.cover_url else None
 
     db.commit()
     db.refresh(folder)

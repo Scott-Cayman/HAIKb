@@ -11,7 +11,7 @@ interface FileType {
   original_name: string;
   size: number;
   created_at: string;
-  folder_id: number;
+  folder_id: number | null;
 }
 
 const Recent = () => {

@@ -1,19 +1,22 @@
+import json
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy import func, and_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 from app.database import get_db
 from app.models.user import User
 from app.models.folder import Folder
 from app.models.file import File
 from app.models.agent_message import AgentMessage
+from app.models.setting import SystemSetting
 from app.models.user_file_view import UserFileView
-from app.dependencies.auth import get_current_super_admin, get_current_admin
+from app.dependencies.auth import get_current_user, get_current_super_admin, get_current_admin
 from app.routers.auth import get_password_hash
 
 router = APIRouter()
+HOME_APPEARANCE_SETTING_KEY = "home_appearance"
 
 class UserCreate(BaseModel):
     name: str
@@ -45,6 +48,15 @@ class UsageStatsResponse(BaseModel):
     total_users: int
 
 
+class HomeAppearanceSettingResponse(BaseModel):
+    value: Optional[Dict[str, Any]] = None
+    updated_at: Optional[datetime] = None
+
+
+class HomeAppearanceSettingUpdate(BaseModel):
+    value: Dict[str, Any]
+
+
 def _get_user_specific_department(user: User) -> Optional[str]:
     """获取用户的具体部门（优先匹配 跨界营销中心、创意部 等关键部门）"""
     if user.full_department_path:
@@ -63,6 +75,16 @@ def _get_time_filter(time_range: str):
         return now - timedelta(days=30)
     return None
 
+
+def _load_json_setting(setting: Optional[SystemSetting]) -> Optional[Dict[str, Any]]:
+    if not setting:
+        return None
+    try:
+        parsed = json.loads(setting.value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
 @router.get("/dashboard")
 def get_dashboard(db: Session = Depends(get_db), current_admin: User = Depends(get_current_admin)):
     users_count = db.query(User).count()
@@ -74,6 +96,46 @@ def get_dashboard(db: Session = Depends(get_db), current_admin: User = Depends(g
         "folders_count": folders_count,
         "files_count": files_count
     }
+
+
+@router.get("/settings/home-appearance", response_model=HomeAppearanceSettingResponse)
+def get_home_appearance_setting(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    setting = db.query(SystemSetting).filter(SystemSetting.key == HOME_APPEARANCE_SETTING_KEY).first()
+    return HomeAppearanceSettingResponse(
+        value=_load_json_setting(setting),
+        updated_at=setting.updated_at if setting else None,
+    )
+
+
+@router.put("/settings/home-appearance", response_model=HomeAppearanceSettingResponse)
+def update_home_appearance_setting(
+    payload: HomeAppearanceSettingUpdate,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin),
+):
+    serialized_value = json.dumps(payload.value, ensure_ascii=False)
+    setting = db.query(SystemSetting).filter(SystemSetting.key == HOME_APPEARANCE_SETTING_KEY).first()
+
+    if setting is None:
+        setting = SystemSetting(
+            key=HOME_APPEARANCE_SETTING_KEY,
+            value=serialized_value,
+            description="首页按钮、组件与封面外观配置",
+        )
+        db.add(setting)
+    else:
+        setting.value = serialized_value
+        setting.description = "首页按钮、组件与封面外观配置"
+
+    db.commit()
+    db.refresh(setting)
+    return HomeAppearanceSettingResponse(
+        value=_load_json_setting(setting),
+        updated_at=setting.updated_at,
+    )
 
 @router.get("/users")
 def get_users(db: Session = Depends(get_db), current_admin: User = Depends(get_current_super_admin)):

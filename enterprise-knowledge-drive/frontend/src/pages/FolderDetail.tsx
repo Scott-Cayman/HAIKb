@@ -342,11 +342,16 @@ const FolderDetail = () => {
       ));
       return response.data.id;
     } catch (error: any) {
+      const status = error.response?.status;
+      const detail = error.response?.data?.detail;
+      const fallbackMessage = status === 413
+        ? '上传失败：文件超过服务器限制，请联系管理员调整上传大小限制'
+        : '上传失败';
       setUploadQueue(prev => prev.map(u => 
         u.id === item.id ? { 
           ...u, 
           status: 'failed', 
-          error: error.response?.data?.detail || '上传失败' 
+          error: detail || fallbackMessage
         } : u
       ));
       return null;

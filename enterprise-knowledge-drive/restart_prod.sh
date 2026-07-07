@@ -1,7 +1,13 @@
 #!/bin/bash
-# HAIKB 生产模式重启脚本 - systemd 管理
+# HAIKB 生产模式重启脚本
+set -e
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$PROJECT_ROOT"
+
+echo "📦 重新构建前端生产包..."
+cd "$PROJECT_ROOT/frontend"
+npm run build
 cd "$PROJECT_ROOT"
 
 echo "🔄 重启后端..."
@@ -16,10 +22,11 @@ for i in {1..30}; do
     sleep 1
 done
 
-echo "🔄 重启前端..."
-systemctl restart haikb-frontend.service
+echo "🔄 重载 Nginx..."
+nginx -t
+nginx -s reload
 
 echo ""
 echo "✅ 重启完成！"
-echo "  - 前端：http://113.59.125.17:5180"
-echo "  - 后端API：http://113.59.125.17:5181"
+echo "  - 正式站点：http://kb.himice.com:5180"
+echo "  - 健康检查：http://kb.himice.com:5180/health"

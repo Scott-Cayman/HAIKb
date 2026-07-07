@@ -2,28 +2,31 @@
 
 企业知识云盘系统，支持文件管理、RAG智能检索和AI Agent对话。
 
+- 快速查看开发与发布命令：[开发说明](file:///home/HAIKB/enterprise-knowledge-drive/开发说明.md)
+
 ## 📋 项目概述
 
 HAIKB（企业知识云盘）是一个基于FastAPI和React构建的企业级知识管理系统，支持文件存储、智能检索和AI对话功能。
 
 ## 🌐 访问地址
 
-### 局域网访问
-- **前端**: http://192.168.9.168:5180
-- **后端API**: http://192.168.9.168:9090
-- **后端文档**: http://192.168.9.168:9090/docs
+### 正式访问
+- **正式站点**: http://kb.himice.com:5180
+- **健康检查**: http://kb.himice.com:5180/health
+- **后端文档（本机）**: http://127.0.0.1:9090/docs
 
-### 公网访问（端口映射）
-- **前端**: http://113.59.125.17:5180
-- **后端API**: http://113.59.125.17:5181
-- **后端文档**: http://113.59.125.17:5181/docs
+### 开发访问
+- **前端 dev（本机默认）**: http://127.0.0.1:5173
+- **前端 dev（内网示例）**: http://192.168.9.168:5173
+- **后端 API（本机）**: http://127.0.0.1:9090
 
 ## 🔌 端口占用情况
 
 | 服务 | 内网端口 | 公网映射端口 | 说明 |
 |------|----------|--------------|------|
-| 前端 | 5180 | 5180 | React + Vite 服务器 |
-| 后端 | 9090 | 5181 | FastAPI API服务 |
+| 正式站点 | 5180 | 5180 | Nginx 托管前端静态资源并反代 `/api` |
+| 开发前端 | 5173 | 无 | React + Vite dev server（默认） |
+| 后端 | 9090 | 无 | FastAPI API 服务（由 Nginx 同源转发） |
 
 ## 🛠️ 技术栈
 
@@ -99,15 +102,12 @@ enterprise-knowledge-drive/
 │   └── rag/                  # RAG向量数据
 ├── logs/                    # 日志目录
 ├── data/                    # 数据目录
-├── start.sh                 # 开发模式启动脚本
-├── stop.sh                  # 开发模式停止脚本
-├── start_prod.sh            # 生产模式启动脚本 (systemd)
-├── stop_prod.sh             # 生产模式停止脚本 (systemd)
-├── restart_prod.sh          # 生产模式重启脚本 (systemd)
+├── start_prod.sh            # 生产模式启动脚本 (build + backend + nginx)
+├── stop_prod.sh             # 生产模式停止脚本
+├── restart_prod.sh          # 生产模式重启脚本 (build + reload nginx)
 ├── status_prod.sh           # 生产模式状态查看脚本
 ├── haikb-backend.service    # 后端 systemd 服务文件
-├── haikb-frontend.service   # 前端 systemd 服务文件
-└── watchdog.sh              # 监控脚本
+└── docs/                    # 补充文档
 ```
 
 ## 🚀 系统管理
@@ -116,32 +116,30 @@ enterprise-knowledge-drive/
 
 | 模式 | 管理方式 | 特点 |
 |------|---------|------|
-| 开发模式 | bash 脚本 | 热重载、实时日志、调试方便 |
-| 生产模式 | systemd | 进程守护、开机自启、日志统一 |
+| 开发模式 | `npm run dev` + 生产后端 | 前端热重载、轻量调试、不额外起第二个后端 |
+| 生产模式 | backend systemd + Nginx | 前端静态托管、同源 `/api`、对外统一入口 |
 
 ### 开发模式
 
 ```bash
-# 启动开发模式（热重载、实时日志）
-./start.sh
+# 在 frontend 目录启动前端开发服务（默认 5173）
+cd frontend
+npm run dev
 
-# 停止开发模式
-./stop.sh
-
-# 停止看门狗
-./stop_watchdog.sh
+# 如需自定义 HMR 地址
+VITE_HMR_HOST=192.168.9.168 VITE_HMR_CLIENT_PORT=5173 npm run dev
 ```
 
 ### 生产模式
 
 ```bash
-# 首次启动（安装 systemd 服务）
+# 首次启动 / 更新部署
 sudo ./start_prod.sh
 
-# 停止服务
+# 停止后端服务
 sudo ./stop_prod.sh
 
-# 重启服务
+# 重新构建前端并重启后端 / 重载 Nginx
 sudo ./restart_prod.sh
 
 # 查看状态
@@ -149,7 +147,7 @@ sudo ./restart_prod.sh
 
 # 查看实时日志
 journalctl -u haikb-backend.service -f
-journalctl -u haikb-frontend.service -f
+journalctl -u nginx -f
 
 # 查看最近日志
 journalctl -u haikb-backend.service -n 100 --no-pager
@@ -158,33 +156,33 @@ journalctl -u haikb-backend.service -n 100 --no-pager
 ### 模式切换
 
 ```bash
-# 从生产模式切换到开发模式
-sudo ./stop_prod.sh      # 停止systemd服务
-./start.sh               # 启动开发模式
+# 开发时保持生产后端运行，仅启动前端 dev
+sudo systemctl start haikb-backend.service
+cd frontend && npm run dev
 
-# 从开发模式切换到生产模式
-./stop.sh                # 停止开发模式
-sudo ./start_prod.sh     # 启动systemd服务
+# 开发完成后重新构建并发布
+sudo ./restart_prod.sh
 ```
 
 ### systemd 服务管理
 
 ```bash
-# 手动管理服务
+# 手动管理后端服务
 sudo systemctl start haikb-backend.service
-sudo systemctl start haikb-frontend.service
 sudo systemctl stop haikb-backend.service
-sudo systemctl stop haikb-frontend.service
 sudo systemctl restart haikb-backend.service
 sudo systemctl status haikb-backend.service
 
+# Nginx 服务
+sudo systemctl status nginx
+sudo systemctl restart nginx
+
 # 开机自启
 sudo systemctl enable haikb-backend.service
-sudo systemctl enable haikb-frontend.service
 
 # 取消开机自启
 sudo systemctl disable haikb-backend.service
-sudo systemctl disable haikb-frontend.service
+
 ```
 
 ## ⚙️ 配置说明
@@ -198,7 +196,7 @@ DINGTALK_CLIENT_ID=your_client_id
 DINGTALK_CLIENT_SECRET=your_client_secret
 DINGTALK_CORP_ID=your_corp_id
 DINGTALK_AGENT_ID=your_agent_id
-DINGTALK_REDIRECT_URI=http://113.59.125.17:5180/auth/dingtalk/callback
+DINGTALK_REDIRECT_URI=http://kb.himice.com:5180/auth/dingtalk/callback
 DINGTALK_ALLOWED_EMAIL_DOMAINS=@himice.com
 ```
 
@@ -242,6 +240,7 @@ tail -f logs/frontend/frontend-$(date +%Y-%m-%d).log
 ```bash
 # 实时日志
 journalctl -u haikb-backend.service -f
+journalctl -u nginx -f
 
 # 今天的所有日志
 journalctl -u haikb-backend.service --since today
@@ -262,10 +261,10 @@ journalctl -p err -u haikb-backend.service
 
 # 手动检查
 systemctl status haikb-backend.service
-systemctl status haikb-frontend.service
+systemctl status nginx
 
 # 检查端口占用
-ss -tulnp | grep -E '5180|9090'
+ss -tulnp | grep -E '5173|5180|9090'
 ```
 
 ### 常见问题
@@ -289,17 +288,18 @@ cd frontend && npm install
 
 # 清除缓存
 rm -rf node_modules/.vite
-npm run dev
+VITE_BACKEND_BASE_URL=http://127.0.0.1:9090 npm run dev -- --port 5173
 ```
 
 **3. 端口被占用**
 ```bash
 # 查看占用进程
+fuser 5173/tcp
 fuser 5180/tcp
 fuser 9090/tcp
 
 # 杀死占用进程
-fuser -k 5180/tcp
+fuser -k 5173/tcp
 fuser -k 9090/tcp
 ```
 
@@ -384,28 +384,27 @@ chmod -R 777 /home/HAIKB/enterprise-knowledge-drive/logs
 
 ## 📌 注意事项
 
-1. **网络配置**: 确保路由器端口映射正确（5180 -> 5180, 9090 -> 5181）
+1. **网络配置**: 正式访问统一走 `kb.himice.com:5180`，前端通过 Nginx 同源访问 `/api`
 2. **数据库**: PostgreSQL需提前安装并运行
 3. **Ollama**: 如需图片理解功能，确保Ollama服务正常运行
 4. **权限**: 确保 `storage/` 和 `logs/` 目录有写入权限
 5. **钉钉**: 确保钉钉应用配置正确，回调地址可访问
-6. **生产模式**: 首次启动需要 root 权限安装 systemd 服务
+6. **生产模式**: 首次启动需要 root 权限安装 / 重载后端服务并执行 Nginx 操作
 
 ## 📄 License
 
 内部项目，仅供公司内部使用。
 
 ## 📄 常用命令
-# 开发模式切换
-./start.sh   # 停止systemd后以开发模式启动
-./stop.sh    # 停止开发模式
+# 开发模式
+cd frontend && npm run dev
 
 # 生产模式管理
-./start_prod.sh    # 安装并启动systemd服务
-./stop_prod.sh     # 停止systemd服务
-./restart_prod.sh  # 重启服务
+./start_prod.sh    # build 前端并启动生产环境
+./stop_prod.sh     # 停止生产后端服务
+./restart_prod.sh  # 重新 build 并重载生产环境
 ./status_prod.sh   # 查看状态
 
 # 实时日志
 journalctl -u haikb-backend.service -f
-journalctl -u haikb-frontend.service -f
+journalctl -u nginx -f

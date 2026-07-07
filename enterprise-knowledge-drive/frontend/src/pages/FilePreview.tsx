@@ -36,7 +36,7 @@ interface FileDetail {
   original_name: string;
   file_ext: string;
   size: number;
-  folder_id: number;
+  folder_id: number | null;
   preview_status: string;
   summary_status: string;
   uploaded_by: number;
