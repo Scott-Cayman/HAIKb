@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Max 材质">
+
+  <defs>
+    <linearGradient id="tile" x1="28" y1="18" x2="224" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#F2FBFF" stop-opacity="0.82"/>
+    </linearGradient>
+    <linearGradient id="main" x1="72" y1="58" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF8D75"/>
+      <stop offset="1" stop-color="#7A5CF2"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="62" y1="72" x2="176" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F2EDFF"/>
+      <stop offset="1" stop-color="#FF8D75"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <circle cx="118" cy="120" r="59" fill="url(#main)"/>
+    <circle cx="150" cy="91" r="27" fill="#FF8D75" opacity="0.86"/>
+    <circle cx="97" cy="151" r="24" fill="#FFFFFF" opacity="0.2"/>
+    <path d="M82 109c19-25 58-40 91-18" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity="0.4"/>
+    <text x="119" y="139" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="60" font-weight="850" fill="#FFFFFF" opacity="0.94">M</text>
+
+    <rect x="82" y="177" width="88" height="30" rx="10" fill="#14283A" opacity="0.22"/>
+    <text x="126" y="199" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="850" fill="#E8EDF2" opacity="0.96">MAT</text>
+  </g>
+</svg>

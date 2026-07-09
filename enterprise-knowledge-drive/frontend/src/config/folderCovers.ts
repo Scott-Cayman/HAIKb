@@ -1,4 +1,5 @@
 import { defaultHomeAppearance, type FolderCardAppearance } from './homeAppearance';
+import { getFolderVisualConfig, type FolderDisplayMode } from './folderVisuals';
 
 export type FolderCoverConfig = {
   folderId?: number;
@@ -8,6 +9,15 @@ export type FolderCoverConfig = {
   statsLabel: string;
   imageUrl?: string;
   theme: FolderCardAppearance;
+  displayMode: FolderDisplayMode;
+  iconKey: string;
+  iconBgFrom: string;
+  iconBgTo: string;
+  iconColor: string;
+  cardBgFrom: string;
+  cardBgVia: string;
+  cardBgTo: string;
+  cardGlowColor: string;
 };
 
 const folderCoverConfigs: FolderCoverConfig[] = [
@@ -17,6 +27,15 @@ const folderCoverConfigs: FolderCoverConfig[] = [
     subtitle: '新员工入职指引与必备资料',
     statsLabel: '57 个文件',
     theme: defaultHomeAppearance.folderCard,
+    displayMode: 'icon',
+    iconKey: 'book-open',
+    iconBgFrom: '#8cf3d5',
+    iconBgTo: '#44d7cc',
+    iconColor: '#ffffff',
+    cardBgFrom: '#ebfff7',
+    cardBgVia: '#d8fff3',
+    cardBgTo: '#c1f7ec',
+    cardGlowColor: '#ffffff',
   },
   {
     folderName: '新人学习库',
@@ -24,6 +43,15 @@ const folderCoverConfigs: FolderCoverConfig[] = [
     subtitle: '学习资料与成长路径',
     statsLabel: '128 个文件',
     theme: defaultHomeAppearance.folderCard,
+    displayMode: 'icon',
+    iconKey: 'graduation-cap',
+    iconBgFrom: '#8cf3d5',
+    iconBgTo: '#44d7cc',
+    iconColor: '#ffffff',
+    cardBgFrom: '#ebfff7',
+    cardBgVia: '#d8fff3',
+    cardBgTo: '#c1f7ec',
+    cardGlowColor: '#ffffff',
   },
   {
     folderName: '项目资料库',
@@ -31,16 +59,40 @@ const folderCoverConfigs: FolderCoverConfig[] = [
     subtitle: '项目文档与方案沉淀',
     statsLabel: '96 个文件',
     theme: defaultHomeAppearance.folderCard,
+    displayMode: 'icon',
+    iconKey: 'briefcase',
+    iconBgFrom: '#8cf3d5',
+    iconBgTo: '#44d7cc',
+    iconColor: '#ffffff',
+    cardBgFrom: '#ebfff7',
+    cardBgVia: '#d8fff3',
+    cardBgTo: '#c1f7ec',
+    cardGlowColor: '#ffffff',
   },
 ];
 
 export const getFolderCoverConfig = (
-  folder: { id: number; name: string; description?: string; cover_url?: string | null },
+  folder: {
+    id: number;
+    name: string;
+    description?: string;
+    cover_url?: string | null;
+    display_mode?: FolderDisplayMode | null;
+    icon_key?: string | null;
+    icon_bg_from?: string | null;
+    icon_bg_to?: string | null;
+    icon_color?: string | null;
+    card_bg_from?: string | null;
+    card_bg_via?: string | null;
+    card_bg_to?: string | null;
+    card_glow_color?: string | null;
+  },
   theme: FolderCardAppearance = defaultHomeAppearance.folderCard,
 ) => {
   const matched =
     folderCoverConfigs.find((item) => item.folderId === folder.id) ||
     folderCoverConfigs.find((item) => item.folderName === folder.name);
+  const visual = getFolderVisualConfig(folder);
 
   return {
     title: matched?.title || folder.name,
@@ -48,5 +100,14 @@ export const getFolderCoverConfig = (
     statsLabel: matched?.statsLabel || '文件夹',
     imageUrl: folder.cover_url || matched?.imageUrl,
     theme,
+    displayMode: visual.displayMode,
+    iconKey: visual.iconKey,
+    iconBgFrom: visual.iconBgFrom,
+    iconBgTo: visual.iconBgTo,
+    iconColor: visual.iconColor,
+    cardBgFrom: visual.cardBgFrom,
+    cardBgVia: visual.cardBgVia,
+    cardBgTo: visual.cardBgTo,
+    cardGlowColor: visual.cardGlowColor,
   };
 };

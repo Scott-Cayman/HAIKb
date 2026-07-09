@@ -30,6 +30,10 @@ export default defineConfig(({ mode }) => {
           target: devProxyTarget,
           changeOrigin: true,
         },
+        '/covers': {
+          target: devProxyTarget,
+          changeOrigin: true,
+        },
       },
       ...(hmrHost
         ? {

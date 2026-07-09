@@ -3,18 +3,40 @@
 @tailwind utilities;
 
 @layer utilities {
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+  .custom-scrollbar,
+  .search-panel-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.58) rgba(241, 245, 249, 0.48);
+    scrollbar-gutter: stable;
   }
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
+
+  .custom-scrollbar::-webkit-scrollbar,
+  .search-panel-scrollbar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
   }
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    @apply bg-slate-300 rounded-full;
+
+  .custom-scrollbar::-webkit-scrollbar-track,
+  .search-panel-scrollbar::-webkit-scrollbar-track {
+    background: rgba(241, 245, 249, 0.48);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
   }
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-400;
+
+  .custom-scrollbar::-webkit-scrollbar-thumb,
+  .search-panel-scrollbar::-webkit-scrollbar-thumb {
+    min-height: 44px;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background: rgba(148, 163, 184, 0.56);
+    background-clip: padding-box;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover,
+  .search-panel-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.64);
   }
 }
 

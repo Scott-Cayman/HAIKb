@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
@@ -16,6 +16,7 @@ import {
   ZoomOut,
   ChevronLeft,
   ChevronRight,
+  X,
 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -30,6 +31,7 @@ import { useAuthStore } from '../stores/authStore';
 import { formatSize } from '../utils';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+const SEARCH_PAGE_STORAGE_KEY = 'enterprise-knowledge-drive:ai-search-state';
 
 interface FileDetail {
   id: number;
@@ -67,69 +69,64 @@ const normalizeTag = (value: unknown) => {
   return text;
 };
 
-const ImageViewer = ({ url, alt }: { url: string; alt: string }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState<number>(1.0);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
-
-  const toggleFullscreen = async () => {
-    try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-        return;
-      }
-
-      if (isExpanded) {
-        setIsExpanded(false);
-        return;
-      }
-
-      if (!document.fullscreenEnabled || !containerRef.current?.requestFullscreen) {
-        setIsExpanded((value) => !value);
-        setScale(0.8);
-        return;
-      }
-
-      await containerRef.current.requestFullscreen();
-      setScale(0.8);
-    } catch {
-      setIsExpanded((value) => !value);
-      setScale(0.8);
-    }
-  };
-
+const MediaFullscreenOverlay = ({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) => {
   useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  useEffect(() => {
-    if (!isExpanded) return;
+    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setIsExpanded(false);
+        onClose();
       }
     };
+    document.body.style.overflow = 'hidden';
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isExpanded]);
+    return () => {
+      document.body.style.overflow = '';
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, onClose]);
 
-  const isViewerMaximized = isFullscreen || isExpanded;
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/90">
+      <div className="absolute right-4 top-4 z-10 flex items-center gap-3">
+        <div className="hidden max-w-[60vw] truncate text-sm text-white/80 md:block">{title}</div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20"
+          aria-label="关闭全屏预览"
+        >
+          <X className="h-5 w-5" />
+        </button>
+      </div>
+      <div className="flex h-full w-full items-center justify-center p-6 md:p-10">
+        {children}
+      </div>
+    </div>
+  );
+};
+
+const ImageViewer = ({ url, alt }: { url: string; alt: string }) => {
+  const [scale, setScale] = useState<number>(1.0);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
 
   const resetScale = () => setScale(1.0);
 
   return (
-    <div
-      ref={containerRef}
-      className={`flex flex-col h-full w-full bg-slate-50 rounded-xl overflow-hidden border border-slate-200 ${
-        isViewerMaximized ? 'fixed inset-0 z-50 rounded-none border-0' : ''
-      }`}
-    >
+    <>
+      <div className="flex h-full w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
       <div className="flex items-center justify-between p-3 bg-white border-b border-slate-200 shadow-sm z-10">
         <div className="flex items-center space-x-1">
           <span className="text-sm font-medium text-slate-600 select-none">{alt}</span>
@@ -149,7 +146,7 @@ const ImageViewer = ({ url, alt }: { url: string; alt: string }) => {
         </div>
 
         <div className="flex items-center space-x-1">
-          <button onClick={toggleFullscreen} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
+          <button onClick={() => setIsExpanded(true)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-600 transition-colors">
             <Maximize2 className="w-5 h-5" />
           </button>
         </div>
@@ -165,12 +162,17 @@ const ImageViewer = ({ url, alt }: { url: string; alt: string }) => {
         <img
           src={url}
           alt={alt}
-          className="object-contain shadow-sm transition-transform duration-200"
+          className="max-h-full max-w-full object-contain shadow-sm transition-transform duration-200"
           style={{ transform: `scale(${scale})`, display: imageLoaded ? 'block' : 'none' }}
           onLoad={() => setImageLoaded(true)}
         />
       </div>
-    </div>
+      </div>
+
+      <MediaFullscreenOverlay open={isExpanded} title={alt} onClose={() => setIsExpanded(false)}>
+        <img src={url} alt={alt} className="max-h-full max-w-full object-contain" />
+      </MediaFullscreenOverlay>
+    </>
   );
 };
 
@@ -182,18 +184,80 @@ const VideoPlayer = ({ fileId }: { fileId: number }) => {
   const token = localStorage.getItem('token') || '';
   // 构建带 token 的流式播放 URL（<video> 标签无法设置自定义请求头）
   const streamUrl = `${API_BASE_URL}/files/${fileId}/stream?token=${encodeURIComponent(token)}`;
+  const [isExpanded, setIsExpanded] = useState(false);
+  const inlineVideoRef = useRef<HTMLVideoElement>(null);
+  const expandedVideoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+
+      const activeElement = document.activeElement;
+      const editableTags = ['INPUT', 'TEXTAREA', 'SELECT'];
+      if (
+        activeElement instanceof HTMLElement &&
+        (editableTags.includes(activeElement.tagName) || activeElement.isContentEditable)
+      ) {
+        return;
+      }
+
+      const activeVideo = isExpanded ? expandedVideoRef.current : inlineVideoRef.current;
+      if (!activeVideo) return;
+
+      event.preventDefault();
+      const duration = Number.isFinite(activeVideo.duration) ? activeVideo.duration : null;
+      const nextTime = event.key === 'ArrowRight'
+        ? activeVideo.currentTime + 15
+        : activeVideo.currentTime - 15;
+
+      if (duration === null) {
+        activeVideo.currentTime = Math.max(0, nextTime);
+        return;
+      }
+
+      activeVideo.currentTime = Math.min(Math.max(0, nextTime), duration);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isExpanded]);
 
   return (
-    <div className="flex items-center justify-center h-full bg-black rounded-xl overflow-hidden">
-      <video
-        src={streamUrl}
-        controls
-        className="max-w-full max-h-full"
-        preload="metadata"
-      >
-        您的浏览器不支持视频播放
-      </video>
-    </div>
+    <>
+      <div className="relative flex h-full items-center justify-center overflow-hidden rounded-xl bg-black">
+        <button
+          type="button"
+          onClick={() => setIsExpanded(true)}
+          className="absolute right-3 top-3 z-10 rounded-lg bg-black/40 p-1.5 text-white transition-colors hover:bg-black/60"
+          aria-label="全屏预览视频"
+        >
+          <Maximize2 className="h-5 w-5" />
+        </button>
+        <video
+          ref={inlineVideoRef}
+          src={streamUrl}
+          controls
+          className="h-full w-full object-contain"
+          preload="metadata"
+        >
+          您的浏览器不支持视频播放
+        </video>
+      </div>
+
+      <MediaFullscreenOverlay open={isExpanded} title="视频预览" onClose={() => setIsExpanded(false)}>
+        <video
+          ref={expandedVideoRef}
+          src={streamUrl}
+          controls
+          autoPlay
+          className="max-h-full max-w-full object-contain"
+          preload="metadata"
+        >
+          您的浏览器不支持视频播放
+        </video>
+      </MediaFullscreenOverlay>
+    </>
   );
 };
 
@@ -201,6 +265,7 @@ const PdfViewer = ({ url }: { url: string }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const pageSizeRef = useRef<{ width: number; height: number } | null>(null);
   const [numPages, setNumPages] = useState<number>();
   const [pageNumber, setPageNumber] = useState<number>(1);
   const [scale, setScale] = useState<number>(1.0);
@@ -210,15 +275,40 @@ const PdfViewer = ({ url }: { url: string }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const applyFitScale = useCallback((pageWidth: number, pageHeight: number) => {
+    const viewportContainer = scrollContainerRef.current || containerRef.current;
+    if (!viewportContainer || !pageWidth || !pageHeight) return;
+
+    const horizontalPadding = isContinuous ? 48 : 32;
+    const verticalPadding = isContinuous ? 48 : 32;
+    const availableWidth = Math.max(viewportContainer.clientWidth - horizontalPadding, 160);
+    const availableHeight = Math.max(viewportContainer.clientHeight - verticalPadding, 160);
+
+    const widthScale = availableWidth / pageWidth;
+    const heightScale = availableHeight / pageHeight;
+    const fitScale = isContinuous ? widthScale : Math.min(widthScale, heightScale);
+
+    setScale(Math.min(Math.max(fitScale, 0.35), 2.0));
+    setAutoFitDone(true);
+  }, [isContinuous]);
+
   useEffect(() => {
-    const updateWidth = () => {
-      if (containerRef.current && autoFitDone) {
-        setScale(1.0);
+    const updateScale = () => {
+      const pageSize = pageSizeRef.current;
+      if (pageSize && autoFitDone) {
+        applyFitScale(pageSize.width, pageSize.height);
       }
     };
-    window.addEventListener('resize', updateWidth);
-    return () => window.removeEventListener('resize', updateWidth);
-  }, [autoFitDone]);
+    window.addEventListener('resize', updateScale);
+    return () => window.removeEventListener('resize', updateScale);
+  }, [applyFitScale, autoFitDone]);
+
+  useEffect(() => {
+    const pageSize = pageSizeRef.current;
+    if (pageSize) {
+      applyFitScale(pageSize.width, pageSize.height);
+    }
+  }, [applyFitScale, isExpanded, isFullscreen]);
 
   const onDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
@@ -228,11 +318,14 @@ const PdfViewer = ({ url }: { url: string }) => {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handlePageOnLoadSuccess = (page: any) => {
-    if (!autoFitDone && containerRef.current && page.originalWidth) {
-      const containerWidth = containerRef.current.clientWidth - 48;
-      const fitScale = containerWidth / page.originalWidth;
-      setScale(Math.min(Math.max(fitScale, 0.5), 2.0));
-      setAutoFitDone(true);
+    const pageWidth = page?.originalWidth || page?.width;
+    const pageHeight = page?.originalHeight || page?.height;
+    if (pageWidth && pageHeight) {
+      pageSizeRef.current = { width: pageWidth, height: pageHeight };
+    }
+
+    if (!autoFitDone && pageSizeRef.current) {
+      applyFitScale(pageSizeRef.current.width, pageSizeRef.current.height);
     }
   };
 
@@ -250,18 +343,15 @@ const PdfViewer = ({ url }: { url: string }) => {
 
       if (!document.fullscreenEnabled || !containerRef.current?.requestFullscreen) {
         setIsExpanded((value) => !value);
-        setScale(0.8);
-        setAutoFitDone(true);
+        setAutoFitDone(false);
         return;
       }
 
       await containerRef.current.requestFullscreen();
-      setScale(0.8);
-      setAutoFitDone(true);
+      setAutoFitDone(false);
     } catch {
       setIsExpanded((value) => !value);
-      setScale(0.8);
-      setAutoFitDone(true);
+      setAutoFitDone(false);
     }
   };
 
@@ -313,6 +403,23 @@ const PdfViewer = ({ url }: { url: string }) => {
         setIsExpanded(false);
         if (document.fullscreenElement) {
           document.exitFullscreen();
+        }
+        return;
+      }
+
+      if ((isFullscreen || isExpanded) && numPages) {
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          if (isContinuous) {
+            setIsContinuous(false);
+          }
+          setPageNumber((p) => Math.max(1, p - 1));
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          if (isContinuous) {
+            setIsContinuous(false);
+          }
+          setPageNumber((p) => Math.min(numPages, p + 1));
         }
         return;
       }
@@ -441,6 +548,7 @@ const PdfViewer = ({ url }: { url: string }) => {
 
 const FilePreview = () => {
   const { id } = useParams<{ id: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
   const isAdmin = !!user?.is_admin;
@@ -470,6 +578,30 @@ const FilePreview = () => {
   const { favoriteFileIds, loadFavoriteStatus, toggleFileFavorite } = useFavoriteStatus();
 
   const [pollTrigger, setPollTrigger] = useState(0);
+  const cameFromSearch =
+    typeof location.state === 'object' &&
+    location.state !== null &&
+    'from' in location.state &&
+    location.state.from === 'search';
+
+  const handleBack = useCallback(() => {
+    const historyIndex =
+      typeof window !== 'undefined' && typeof window.history.state?.idx === 'number'
+        ? window.history.state.idx
+        : 0;
+
+    if (cameFromSearch && historyIndex > 0) {
+      navigate(-1);
+      return;
+    }
+
+    if (cameFromSearch && typeof window !== 'undefined' && window.sessionStorage.getItem(SEARCH_PAGE_STORAGE_KEY)) {
+      navigate('/search', { replace: true });
+      return;
+    }
+
+    navigate(-1);
+  }, [cameFromSearch, navigate]);
 
   const fetchSummary = useCallback(async () => {
     if (!id) return;
@@ -697,7 +829,7 @@ const FilePreview = () => {
       <div className="flex flex-col items-center justify-center h-[60vh] space-y-4">
         <AlertCircle className="w-12 h-12 text-red-500" />
         <p className="text-slate-600">{error || '文件不存在'}</p>
-        <button onClick={() => navigate(-1)} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200">
+        <button onClick={handleBack} className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200">
           返回上一页
         </button>
       </div>
@@ -743,7 +875,7 @@ const FilePreview = () => {
     <div className="h-[calc(100vh-8rem)] flex flex-col space-y-4">
       <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
         <div className="flex items-center space-x-4">
-          <button onClick={() => navigate(-1)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
+          <button onClick={handleBack} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>

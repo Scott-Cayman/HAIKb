@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="图片">
+
+  <defs>
+    <linearGradient id="tile" x1="28" y1="18" x2="224" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#F2FBFF" stop-opacity="0.82"/>
+    </linearGradient>
+    <linearGradient id="main" x1="72" y1="58" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#71D0FF"/>
+      <stop offset="1" stop-color="#3497F4"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="62" y1="72" x2="176" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D9F4FF"/>
+      <stop offset="1" stop-color="#71D0FF"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <path d="M82 52h68l36 36v102c0 12-10 22-22 22H82c-12 0-22-10-22-22V74c0-12 10-22 22-22z" fill="url(#main)"/>
+    <path d="M150 52v34c0 9 7 16 16 16h20z" fill="#FFFFFF" opacity="0.24"/>
+    <rect x="80" y="96" width="84" height="65" rx="12" fill="#FFFFFF" opacity="0.16"/>
+    <circle cx="101" cy="116" r="8" fill="#EAF9FF" opacity="0.94"/>
+    <path d="M85 154l24-25 16 17 13-14 26 22z" fill="#EAF9FF" opacity="0.9"/>
+    <path d="M87 181h66" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity="0.35"/>
+  </g>
+</svg>

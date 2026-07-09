@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="文件夹">
+
+  <defs>
+    <linearGradient id="tile" x1="28" y1="18" x2="224" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#F2FBFF" stop-opacity="0.82"/>
+    </linearGradient>
+    <linearGradient id="main" x1="72" y1="58" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD65B"/>
+      <stop offset="1" stop-color="#FDB62D"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="62" y1="72" x2="176" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF7DC"/>
+      <stop offset="1" stop-color="#FFD65B"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <path d="M78 61h42l14 18h39c12 0 21 9 21 21v87c0 13-10 23-23 23H78c-13 0-23-10-23-23V84c0-13 10-23 23-23z" fill="url(#main)"/>
+    <path d="M78 61h42l14 18h60v27H55V84c0-13 10-23 23-23z" fill="#FFD76C" opacity="0.98"/>
+    <path d="M80 122h90" stroke="#FFF5BF" stroke-width="9" stroke-linecap="round" opacity="0.72"/>
+    <path d="M82 147h69M82 172h80" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity="0.34"/>
+  </g>
+</svg>

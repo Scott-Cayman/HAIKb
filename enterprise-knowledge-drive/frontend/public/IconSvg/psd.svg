@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="PSD">
+
+  <defs>
+    <linearGradient id="tile" x1="28" y1="18" x2="224" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#F2FBFF" stop-opacity="0.82"/>
+    </linearGradient>
+    <linearGradient id="main" x1="72" y1="58" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#56B4FF"/>
+      <stop offset="1" stop-color="#206CFF"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="62" y1="72" x2="176" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EAF4FF"/>
+      <stop offset="1" stop-color="#56B4FF"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <path d="M83 52h66l36 36v102c0 12-10 22-22 22H83c-12 0-22-10-22-22V74c0-12 10-22 22-22z" fill="url(#main)"/>
+    <path d="M149 52v34c0 9 7 16 16 16h20z" fill="#FFFFFF" opacity="0.25"/>
+    <text x="122" y="112" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="43" font-weight="900" fill="#FFFFFF" opacity="0.98">PSD</text>
+    <rect x="81" y="126" width="78" height="42" rx="10" fill="#EAF6FF" opacity="0.24"/>
+    <circle cx="100" cy="141" r="6" fill="#E7F7FF" opacity="0.95"/>
+    <path d="M86 162l19-17 13 12 11-10 26 15z" fill="#E7F7FF" opacity="0.9"/>
+    <rect x="111" y="134" width="48" height="32" rx="8" fill="#0C4FCF" opacity="0.3"/>
+    <path d="M111 134h48v32h-48z" fill="none" stroke="#E8F6FF" stroke-width="4" stroke-dasharray="6 5" opacity="0.78"/>
+
+    <rect x="83" y="178" width="90" height="30" rx="10" fill="#14283A" opacity="0.22"/>
+    <text x="128" y="200" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="850" fill="#E8EDF2" opacity="0.96">PSD</text>
+  </g>
+</svg>

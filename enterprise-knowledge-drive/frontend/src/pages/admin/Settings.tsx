@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Bell, FileImage, Folder, Palette, Sparkles } from 'lucide-react';
-import api from '../../services/api';
 import {
   defaultHomeAppearance,
   gradientToCss,
@@ -10,12 +9,6 @@ import {
   getHomeAppearanceConfig,
   saveHomeAppearanceConfig,
 } from '../../services/homeAppearance';
-
-type FolderCoverItem = {
-  id: number;
-  name: string;
-  cover_url?: string | null;
-};
 
 type ColorFieldGroup = {
   title: string;
@@ -99,8 +92,6 @@ const setNestedColorValue = (
 
 const Settings = () => {
   const [config, setConfig] = useState<HomeAppearanceConfig>(defaultHomeAppearance);
-  const [folders, setFolders] = useState<FolderCoverItem[]>([]);
-  const [initialFolders, setInitialFolders] = useState<Record<number, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -109,19 +100,10 @@ const Settings = () => {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const [{ config: appearanceConfig, updatedAt: appearanceUpdatedAt }, foldersResponse] = await Promise.all([
-          getHomeAppearanceConfig(),
-          api.get<FolderCoverItem[]>('/folders'),
-        ]);
+        const { config: appearanceConfig, updatedAt: appearanceUpdatedAt } = await getHomeAppearanceConfig();
 
         setConfig(appearanceConfig);
         setUpdatedAt(appearanceUpdatedAt);
-        setFolders(foldersResponse.data);
-        setInitialFolders(
-          Object.fromEntries(
-            foldersResponse.data.map((folder) => [folder.id, folder.cover_url || '']),
-          ),
-        );
       } catch (error) {
         console.error('Failed to load settings', error);
         setMessage('系统配置加载失败，请刷新后重试');
@@ -133,49 +115,21 @@ const Settings = () => {
     loadSettings();
   }, []);
 
-  const changedCovers = useMemo(
-    () =>
-      folders.filter((folder) => (folder.cover_url || '') !== (initialFolders[folder.id] || '')),
-    [folders, initialFolders],
-  );
-
   const handleColorChange = (path: string, value: string) => {
     setConfig((prev) => setNestedColorValue(prev, path, value));
-  };
-
-  const handleCoverChange = (folderId: number, value: string) => {
-    setFolders((prev) =>
-      prev.map((folder) =>
-        folder.id === folderId
-          ? { ...folder, cover_url: value }
-          : folder,
-      ),
-    );
   };
 
   const handleSave = async () => {
     setIsSaving(true);
     setMessage(null);
     try {
-      const [appearanceResult] = await Promise.all([
-        saveHomeAppearanceConfig(config),
-        ...changedCovers.map((folder) =>
-          api.patch(`/folders/${folder.id}`, {
-            cover_url: folder.cover_url?.trim() || null,
-          }),
-        ),
-      ]);
+      const appearanceResult = await saveHomeAppearanceConfig(config);
 
       setUpdatedAt(appearanceResult.updatedAt);
-      setInitialFolders(
-        Object.fromEntries(
-          folders.map((folder) => [folder.id, folder.cover_url || '']),
-        ),
-      );
-      setMessage(`保存成功，已更新 ${changedCovers.length} 个封面设置`);
+      setMessage('系统配置已保存');
     } catch (error) {
       console.error('Failed to save settings', error);
-      setMessage('保存失败，请检查封面地址或稍后重试');
+      setMessage('保存失败，请稍后重试');
     } finally {
       setIsSaving(false);
     }
@@ -243,35 +197,6 @@ const Settings = () => {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-lg">
-            <div className="mb-5 flex items-center gap-3">
-              <div className="rounded-xl bg-emerald-500/15 p-2 text-emerald-300">
-                <FileImage className="h-5 w-5" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-white">文件夹封面</h2>
-                <p className="text-sm text-slate-400">支持为首页卡片配置封面地址，留空则使用默认封面。</p>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              {folders.map((folder) => (
-                <div key={folder.id} className="rounded-xl border border-slate-700 bg-slate-900/45 p-4">
-                  <div className="mb-2 flex items-center gap-2 text-slate-200">
-                    <Folder className="h-4 w-4 text-emerald-300" />
-                    <span className="font-medium">{folder.name}</span>
-                  </div>
-                  <input
-                    type="text"
-                    value={folder.cover_url || ''}
-                    onChange={(event) => handleCoverChange(folder.id, event.target.value)}
-                    placeholder="https://example.com/cover.png"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-emerald-500"
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
         <div className="space-y-6">
@@ -404,7 +329,7 @@ const Settings = () => {
             </button>
             {message ? <p className="mt-3 text-sm text-slate-300">{message}</p> : null}
             <p className="mt-3 text-xs leading-6 text-slate-500">
-              说明：封面目前使用图片地址方式替换，适合先快速落地。后续如需管理员上传图片文件，我可以继续补上传接口和素材管理。
+              说明：文件夹独立配置请从文件夹页的“编辑配置”入口进入，系统配置页仅保留全局首页样式能力。
             </p>
           </div>
         </div>

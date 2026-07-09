@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, Folder, Loader2, Star } from 'lucide-react';
+import { Loader2, Star } from 'lucide-react';
 
-import FavoriteButton from '../components/FavoriteButton';
+import LibraryItemsView from '../components/library/LibraryItemsView';
+import type { CollectionItem, CollectionViewMode } from '../components/library/types';
 import { favoritesApi, type FavoriteListItem } from '../services/favorites';
 import { formatDate, formatSize } from '../utils';
 
@@ -14,6 +15,7 @@ const Favorites = () => {
   const navigate = useNavigate();
   const [items, setItems] = useState<FavoriteListItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<CollectionViewMode>('grid');
   const fetchPromiseRef = useRef<Promise<void> | null>(null);
 
   const fetchFavorites = async () => {
@@ -27,6 +29,40 @@ const Favorites = () => {
       setLoading(false);
     }
   };
+
+  const collectionItems: CollectionItem[] = items.map((item) => {
+    const isFile = item.item_type === 'file' && item.file;
+    const targetId = isFile ? item.file!.id : item.folder?.id;
+    const title = isFile ? item.file!.original_name : item.folder?.name || '未命名';
+
+    return {
+      kind: isFile ? 'file' : 'folder',
+      id: item.favorite_id,
+      name: title,
+      onOpen: () => {
+        if (!targetId) return;
+        navigate(isFile ? `/files/${targetId}` : `/folders/${targetId}`);
+      },
+      description: isFile ? null : item.folder?.description || '文件夹',
+      sizeLabel: isFile ? formatSize(item.file!.size) : null,
+      dateLabel: formatFavoriteDate((isFile ? item.file?.created_at : item.folder?.created_at) || item.created_at),
+      previewStatus: isFile ? item.file?.preview_status : null,
+      favorite: {
+        active: true,
+        title: '取消收藏',
+        onClick: () => removeFavorite(item),
+      },
+      action: targetId
+        ? {
+            label: isFile ? '查看' : '打开',
+            onClick: (event) => {
+              event.stopPropagation();
+              navigate(isFile ? `/files/${targetId}` : `/folders/${targetId}`);
+            },
+          }
+        : null,
+    };
+  });
 
   useEffect(() => {
     if (!fetchPromiseRef.current) {
@@ -71,50 +107,15 @@ const Favorites = () => {
             正在加载收藏...
           </div>
         ) : items.length > 0 ? (
-          <div className="divide-y divide-slate-50">
-            {items.map(item => {
-              const isFile = item.item_type === 'file' && item.file;
-              const targetId = isFile ? item.file!.id : item.folder?.id;
-              const title = isFile ? item.file!.original_name : item.folder?.name || '未命名';
-              const meta = isFile
-                ? `${formatSize(item.file!.size)} · ${formatFavoriteDate(item.file!.created_at || item.created_at)}`
-                : `${item.folder?.description || '文件夹'} · ${formatFavoriteDate(item.folder?.created_at || item.created_at)}`;
-
-              return (
-                <div
-                  key={item.favorite_id}
-                  onClick={() => {
-                    if (!targetId) return;
-                    navigate(isFile ? `/files/${targetId}` : `/folders/${targetId}`);
-                  }}
-                  className="p-5 hover:bg-slate-50/60 transition-colors group cursor-pointer flex items-center gap-4"
-                >
-                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${isFile ? 'bg-blue-50' : 'bg-amber-50'}`}>
-                    {isFile ? (
-                      <FileText className="w-5 h-5 text-blue-600" />
-                    ) : (
-                      <Folder className="w-5 h-5 text-amber-600" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3">
-                      <h3 className="font-medium text-slate-800 group-hover:text-blue-600 transition-colors truncate">{title}</h3>
-                      <span className={`text-[11px] px-2 py-0.5 rounded-full ${isFile ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
-                        {isFile ? '文件' : '文件夹'}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1 truncate">{meta}</div>
-                  </div>
-                  <FavoriteButton
-                    active={true}
-                    title="取消收藏"
-                    className="w-9 h-9 shrink-0"
-                    onClick={() => removeFavorite(item)}
-                  />
-                </div>
-              );
-            })}
-          </div>
+          <LibraryItemsView
+            items={collectionItems}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+            itemCountLabel={`${items.length} 项`}
+            secondaryColumn={{ label: '说明' }}
+            sizeColumn={{ label: '大小' }}
+            dateColumn={{ label: '收藏时间' }}
+          />
         ) : (
           <div className="p-12 text-center">
             <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">

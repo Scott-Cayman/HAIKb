@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="书籍">
+
+  <defs>
+    <linearGradient id="tile" x1="28" y1="18" x2="224" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#F2FBFF" stop-opacity="0.82"/>
+    </linearGradient>
+    <linearGradient id="main" x1="72" y1="58" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFA15D"/>
+      <stop offset="1" stop-color="#F06B3D"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="62" y1="72" x2="176" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF2E8"/>
+      <stop offset="1" stop-color="#FFA15D"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <path d="M75 65h83c15 0 27 12 27 27v91c0 14-11 25-25 25H80c-14 0-25-11-25-25V85c0-11 9-20 20-20z" fill="url(#main)"/>
+    <path d="M55 92h18M55 122h18M55 152h18" stroke="#FFE2CE" stroke-width="10" stroke-linecap="round" opacity="0.88"/>
+    <text x="127" y="122" text-anchor="middle" font-family="Microsoft YaHei, Arial, sans-serif" font-size="50" font-weight="800" fill="#FFFFFF" opacity="0.92">文</text>
+    <path d="M105 147h47M105 165h39" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity="0.58"/>
+  </g>
+</svg>

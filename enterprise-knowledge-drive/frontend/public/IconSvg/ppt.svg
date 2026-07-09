@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="PPT">
+
+  <defs>
+    <linearGradient id="tile" x1="28" y1="18" x2="224" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#F2FBFF" stop-opacity="0.82"/>
+    </linearGradient>
+    <linearGradient id="main" x1="72" y1="58" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF8E66"/>
+      <stop offset="1" stop-color="#F05248"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="62" y1="72" x2="176" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF0EC"/>
+      <stop offset="1" stop-color="#FF8E66"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <path d="M83 52h66l36 36v102c0 12-10 22-22 22H83c-12 0-22-10-22-22V74c0-12 10-22 22-22z" fill="url(#main)"/>
+    <path d="M149 52v34c0 9 7 16 16 16h20z" fill="#FFFFFF" opacity="0.26"/>
+    <text x="123" y="120" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="50" font-weight="850" fill="#FFFFFF" opacity="0.96">PPT</text>
+    <path d="M91 143h64M101 160h45" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity="0.48"/>
+
+    <rect x="83" y="178" width="90" height="30" rx="10" fill="#14283A" opacity="0.22"/>
+    <text x="128" y="200" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="850" fill="#E8EDF2" opacity="0.96">PPT</text>
+  </g>
+</svg>

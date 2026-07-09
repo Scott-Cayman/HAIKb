@@ -1,5 +1,14 @@
-export const formatDate = (dateString: string) => {
+export const formatDate = (dateString?: string | null) => {
+  if (!dateString) {
+    return '时间未知';
+  }
+
   const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) {
+    return '时间未知';
+  }
+
   const now = new Date();
   const diff = now.getTime() - date.getTime();
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));

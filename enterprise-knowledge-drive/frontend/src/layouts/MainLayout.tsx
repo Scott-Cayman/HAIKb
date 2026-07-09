@@ -35,22 +35,21 @@ const MainLayout = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-transparent px-5 py-5 font-sans text-slate-800">
-      <div className="flex min-h-[calc(100vh-2.5rem)] rounded-[32px] border border-white/70 bg-white/45 shadow-[0_22px_60px_rgba(149,167,194,0.12)] backdrop-blur-xl">
+    <div className="h-screen overflow-hidden bg-transparent px-4 py-4 font-sans text-slate-800 xl:px-5 xl:py-5">
+      <div className="flex h-[calc(100vh-2rem)] overflow-hidden rounded-[28px] border border-white/70 bg-white/40 shadow-[0_18px_48px_rgba(149,167,194,0.1)] backdrop-blur-xl xl:h-[calc(100vh-2.5rem)] xl:rounded-[32px]">
       {/* Sidebar */}
-      <aside className="flex w-[264px] flex-col rounded-l-[32px] border-r border-white/70 bg-white/65 px-4 py-5 shadow-sm z-10">
+      <aside className="z-10 flex h-full w-[236px] shrink-0 flex-col rounded-l-[28px] border-r border-white/70 bg-white/62 px-4 py-5 shadow-sm xl:w-[248px] xl:rounded-l-[32px]">
         <div className="mb-6 flex items-center px-3">
           <div className="mr-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-[#79f2df] via-[#5ee7d6] to-[#8eb8ff] shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_14px_30px_rgba(123,223,211,0.35)]">
             <Cloud className="w-5 h-5 text-white" />
           </div>
           <div>
-            <div className="font-bold text-lg tracking-tight text-slate-900">知识云盘</div>
-            <div className="text-xs text-slate-400">企业资料协作中心</div>
+            <div className="font-bold text-lg tracking-tight text-slate-900">HAIKB</div>
+            <div className="text-xs text-slate-400">企业AI知识云盘</div>
           </div>
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-2">
-          <div className="mb-4 pl-3 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">企业门户</div>
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
             return (
@@ -106,10 +105,10 @@ const MainLayout = () => {
       </aside>
 
       {/* Main Content */}
-      <main className="relative flex flex-1 flex-col overflow-hidden">
+      <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* Page Content */}
-        <div className="flex-1 overflow-y-auto px-8 py-8">
-          <div className="mx-auto max-w-[1240px]">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 xl:px-7 xl:py-7">
+          <div className="h-full w-full">
             <Outlet />
           </div>
         </div>

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="题库">
+
+  <defs>
+    <linearGradient id="tile" x1="28" y1="18" x2="224" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#F2FBFF" stop-opacity="0.82"/>
+    </linearGradient>
+    <linearGradient id="main" x1="72" y1="58" x2="180" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#62B9FF"/>
+      <stop offset="1" stop-color="#308CEB"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="62" y1="72" x2="176" y2="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ECF7FF"/>
+      <stop offset="1" stop-color="#62B9FF"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <path d="M76 89c0-13 11-24 24-24h70c10 0 18 8 18 18v89c0 12-10 22-22 22H79c-12 0-22-10-22-22v-15c0-10 8-18 18-18h95v-50z" fill="url(#main)"/>
+    <path d="M76 139h94v55H76c-12 0-22-10-22-22v-11c0-12 10-22 22-22z" fill="#1F78D2" opacity="0.42"/>
+    <path d="M92 93h60M92 113h42" stroke="#EAF8FF" stroke-width="8" stroke-linecap="round" opacity="0.65"/>
+    <path d="M112 157c2-15 29-14 29 2 0 17-20 14-20 31" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="121" cy="203" r="5" fill="#FFFFFF"/>
+  </g>
+</svg>

@@ -12,6 +12,7 @@ import Login from './pages/Login';
 import DingTalkCallback from './pages/DingTalkCallback';
 import Home from './pages/Home';
 import FolderDetail from './pages/FolderDetail';
+import FolderSettings from './pages/FolderSettings';
 import FilePreview from './pages/FilePreview';
 import Search from './pages/Search';
 import Recent from './pages/Recent';
@@ -23,7 +24,6 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import FoldersManage from './pages/admin/FoldersManage';
 import UsageStats from './pages/admin/UsageStats';
 import UsersManage from './pages/admin/UsersManage';
-import Settings from './pages/admin/Settings';
 import RagManage from './pages/admin/RagManage';
 
 const ProtectedRoute = ({ children, requireAdmin = false }: { children: React.ReactNode, requireAdmin?: boolean }) => {
@@ -67,6 +67,7 @@ const App = () => {
           }>
             <Route index element={<Home />} />
             <Route path="folders/:id" element={<FolderDetail />} />
+            <Route path="folders/:id/settings" element={<FolderSettings />} />
             <Route path="files/:id" element={<FilePreview />} />
             <Route path="search" element={<Search />} />
             <Route path="recent" element={<Recent />} />
@@ -83,7 +84,7 @@ const App = () => {
             <Route path="folders" element={<FoldersManage />} />
             <Route path="usage-stats" element={<UsageStats />} />
             <Route path="users" element={<UsersManage />} />
-            <Route path="settings" element={<Settings />} />
+            <Route path="settings" element={<Navigate to="/admin" replace />} />
             <Route path="rag" element={<RagManage />} />
           </Route>
         </Routes>

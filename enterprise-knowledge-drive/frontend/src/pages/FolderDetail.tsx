@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, File, Upload, MoreVertical, CheckCircle, XCircle, Loader2, Folder, Grid, List, FileText, Image, Film, Music, Archive, PencilLine, Trash2, X } from 'lucide-react';
+import { ArrowLeft, File, Upload, MoreVertical, CheckCircle, XCircle, Loader2, Folder, PencilLine, Trash2, X, Settings2 } from 'lucide-react';
 import api, { LONG_TIMEOUT } from '../services/api';
 import { ragApi, type BatchSummaryTaskResponse } from '../services/ragApi';
 import FavoriteButton from '../components/FavoriteButton';
+import LibraryItemsView from '../components/library/LibraryItemsView';
+import type { CollectionItem } from '../components/library/types';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
 import { formatDate, formatSize } from '../utils';
 import { useAuthStore } from '../stores/authStore';
@@ -13,6 +15,11 @@ interface FolderType {
   name: string;
   description: string;
   parent_id: number | null;
+  icon_key?: string | null;
+  icon_bg_from?: string | null;
+  icon_bg_to?: string | null;
+  icon_color?: string | null;
+  can_manage_settings?: boolean;
 }
 
 interface FileType {
@@ -28,6 +35,11 @@ interface SubFolder {
   id: number;
   name: string;
   parent_id: number | null;
+  icon_key?: string | null;
+  icon_bg_from?: string | null;
+  icon_bg_to?: string | null;
+  icon_color?: string | null;
+  can_manage_settings?: boolean;
 }
 
 interface UploadItem {
@@ -46,51 +58,11 @@ type ActionTarget =
   | { kind: 'folder'; id: number; name: string }
   | { kind: 'file'; id: number; name: string; size: number };
 
-const getFileIcon = (fileName: string) => {
-  const ext = fileName.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'jpg':
-    case 'jpeg':
-    case 'png':
-    case 'gif':
-    case 'webp':
-    case 'svg':
-      return <Image className="w-10 h-10 text-emerald-500" />;
-    case 'mp4':
-    case 'avi':
-    case 'mov':
-    case 'mkv':
-      return <Film className="w-10 h-10 text-purple-500" />;
-    case 'mp3':
-    case 'wav':
-    case 'flac':
-    case 'aac':
-      return <Music className="w-10 h-10 text-pink-500" />;
-    case 'zip':
-    case 'rar':
-    case '7z':
-    case 'tar':
-    case 'gz':
-      return <Archive className="w-10 h-10 text-amber-500" />;
-    case 'doc':
-    case 'docx':
-    case 'xls':
-    case 'xlsx':
-    case 'ppt':
-    case 'pptx':
-    case 'pdf':
-    case 'txt':
-      return <FileText className="w-10 h-10 text-blue-500" />;
-    default:
-      return <File className="w-10 h-10 text-slate-400" />;
-  }
-};
-
 const FolderDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const canEdit = !!user?.is_admin || !!user?.is_super_admin;
+  const canManageFiles = !!user?.is_admin || !!user?.is_super_admin;
   const [folder, setFolder] = useState<FolderType | null>(null);
   const [subfolders, setSubfolders] = useState<SubFolder[]>([]);
   const [files, setFiles] = useState<FileType[]>([]);
@@ -457,7 +429,6 @@ const FolderDetail = () => {
   };
 
   const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-  const getFavoriteButtonVisibility = (active: boolean) => (active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100');
 
   const sortedSubfolders = [...subfolders].sort((a, b) => {
     const comparison = naturalCollator.compare(a.name, b.name);
@@ -505,14 +476,154 @@ const FolderDetail = () => {
     }
   };
 
+  const folderCollectionItems: CollectionItem[] = sortedSubfolders.map((subfolder, idx) => {
+    const isLastItem = idx === sortedSubfolders.length - 1 && sortedFiles.length === 0;
+
+    return {
+      kind: 'folder',
+      id: subfolder.id,
+      name: subfolder.name,
+      onOpen: () => navigate(`/folders/${subfolder.id}`),
+      secondaryLabel: '文件夹',
+      statusLabel: '文件夹',
+      iconKey: subfolder.icon_key,
+      iconBgFrom: subfolder.icon_bg_from,
+      iconBgTo: subfolder.icon_bg_to,
+      iconColor: subfolder.icon_color,
+      favorite: {
+        active: favoriteFolderIds.has(subfolder.id),
+        title: favoriteFolderIds.has(subfolder.id) ? '取消收藏文件夹' : '收藏文件夹',
+        onClick: () => handleToggleFolderFavorite(subfolder.id),
+      },
+      menu: subfolder.can_manage_settings ? (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setOpenMenuKey((prev) => (prev === `folder-${subfolder.id}` ? null : `folder-${subfolder.id}`));
+            }}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="rounded-full p-2 text-slate-400 opacity-0 transition-colors hover:bg-slate-100 hover:text-slate-700 group-hover:opacity-100"
+          >
+            <MoreVertical className="h-4 w-4" />
+          </button>
+          {openMenuKey === `folder-${subfolder.id}` ? (
+            <div
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              className={`absolute right-0 z-20 w-40 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_30px_rgba(188,199,220,0.25)] ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
+            >
+              <button
+                type="button"
+                onClick={() => navigate(`/folders/${subfolder.id}/settings`)}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                <PencilLine className="h-4 w-4 text-slate-500" />
+                编辑配置
+              </button>
+              <button
+                type="button"
+                onClick={() => openDeleteDialog({ kind: 'folder', id: subfolder.id, name: subfolder.name })}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                删除
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null,
+    };
+  });
+
+  const fileCollectionItems: CollectionItem[] = sortedFiles.map((file, idx) => {
+    const isLastItem = idx === sortedFiles.length - 1;
+
+    return {
+      kind: 'file',
+      id: file.id,
+      name: file.original_name,
+      onOpen: () => navigate(`/files/${file.id}`),
+      sizeLabel: formatSize(file.size),
+      dateLabel: formatDate(file.created_at),
+      previewStatus: file.preview_status,
+      statusLabel:
+        file.preview_status === 'success'
+          ? '可预览'
+          : file.preview_status === 'pending'
+            ? '处理中'
+            : '仅下载',
+      statusTone:
+        file.preview_status === 'success'
+          ? 'success'
+          : file.preview_status === 'pending'
+            ? 'warning'
+            : 'neutral',
+      favorite: {
+        active: favoriteFileIds.has(file.id),
+        title: favoriteFileIds.has(file.id) ? '取消收藏文件' : '收藏文件',
+        onClick: () => handleToggleFileFavorite(file.id),
+      },
+      action: {
+        label: '查看',
+        onClick: (event) => {
+          event.stopPropagation();
+          navigate(`/files/${file.id}`);
+        },
+      },
+      menu: canManageFiles ? (
+        <div className="relative">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              setOpenMenuKey((prev) => (prev === `file-${file.id}` ? null : `file-${file.id}`));
+            }}
+            onMouseDown={(event) => event.stopPropagation()}
+            className="rounded-full p-2 text-slate-400 opacity-0 transition-colors hover:bg-slate-100 hover:text-slate-700 group-hover:opacity-100"
+          >
+            <MoreVertical className="h-4 w-4" />
+          </button>
+          {openMenuKey === `file-${file.id}` ? (
+            <div
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              className={`absolute right-0 z-20 w-40 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_30px_rgba(188,199,220,0.25)] ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
+            >
+              <button
+                type="button"
+                onClick={() => openRenameDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                <PencilLine className="h-4 w-4 text-slate-500" />
+                重命名
+              </button>
+              <button
+                type="button"
+                onClick={() => openDeleteDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                删除
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null,
+    };
+  });
+
+  const collectionItems: CollectionItem[] = [...folderCollectionItems, ...fileCollectionItems];
+
   if (!folder) return <div className="p-8 text-center text-slate-500">加载中...</div>;
 
   // 判断是否是二级文件夹（有 parent_id）
   const isSecondLevel = folder.parent_id !== null;
 
   return (
-    <div className="space-y-6 relative">
-      <div className="flex items-center justify-between">
+    <div className="relative flex h-full min-h-0 flex-col gap-6">
+      <div className="shrink-0 flex items-center justify-between">
         <div className="flex items-center space-x-4">
           <button 
             onClick={() => navigate(-1)}
@@ -530,7 +641,7 @@ const FolderDetail = () => {
         </div>
         
         <div className="flex items-center space-x-3">
-          {canEdit && (
+          {canManageFiles && (
             <>
               <input 
                 type="file" 
@@ -547,6 +658,16 @@ const FolderDetail = () => {
                 multiple
                 className="hidden" 
               />
+              {folder.can_manage_settings ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/folders/${folder.id}/settings`)}
+                  className="flex items-center rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-all hover:bg-slate-200"
+                >
+                  <Settings2 className="mr-2 h-4 w-4" />
+                  编辑配置
+                </button>
+              ) : null}
               {!isSecondLevel && (
                 <button 
                   onClick={() => folderInputRef.current?.click()}
@@ -567,12 +688,22 @@ const FolderDetail = () => {
               </button>
             </>
           )}
+          {!canManageFiles && folder.can_manage_settings ? (
+            <button
+              type="button"
+              onClick={() => navigate(`/folders/${folder.id}/settings`)}
+              className="flex items-center rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-all hover:bg-slate-200"
+            >
+              <Settings2 className="mr-2 h-4 w-4" />
+              编辑配置
+            </button>
+          ) : null}
         </div>
       </div>
 
       {/* Upload Panel */}
       {showUploadPanel && uploadQueue.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-lg">
+        <div className="shrink-0 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-lg">
           <div className="p-4 border-b border-slate-100 bg-slate-50/50">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-4 text-sm">
@@ -721,17 +852,27 @@ const FolderDetail = () => {
         </div>
       )}
 
-      <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+      <div className="min-h-0 flex flex-1 flex-col bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
         {(subfolders.length === 0 && files.length === 0) ? (
-          <div className="p-16 text-center">
+          <div className="flex flex-1 flex-col items-center justify-center p-16 text-center">
             <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
               <File className="w-8 h-8 text-slate-300" />
             </div>
             <p className="text-slate-500 font-medium mb-2">此文件夹为空</p>
-            {canEdit && (
+            {canManageFiles && (
               <>
                 <p className="text-sm text-slate-400 mb-6">点击下方按钮添加内容</p>
                 <div className="flex items-center justify-center space-x-3">
+                  {folder.can_manage_settings ? (
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/folders/${folder.id}/settings`)}
+                      className="flex items-center rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200"
+                    >
+                      <Settings2 className="mr-2 h-4 w-4" />
+                      编辑配置
+                    </button>
+                  ) : null}
                   {!isSecondLevel && (
                     <button 
                       onClick={() => folderInputRef.current?.click()}
@@ -753,265 +894,33 @@ const FolderDetail = () => {
                 </div>
               </>
             )}
-            {!canEdit && <p className="text-sm text-slate-400">您没有权限添加内容</p>}
+            {!canManageFiles && <p className="text-sm text-slate-400">您没有权限添加内容</p>}
           </div>
         ) : (
-          <>
-            <div className="flex items-center justify-between p-4 border-b border-slate-100">
-              <p className="text-sm text-slate-500">{(subfolders.length + files.length)} 个项目</p>
-              <div className="flex items-center space-x-1 bg-slate-100 rounded-lg p-1">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('list')}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  className={`p-1.5 rounded-md transition-colors ${viewMode === 'list' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
-                  title="列表视图"
-                >
-                  <List className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('grid')}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  className={`p-1.5 rounded-md transition-colors ${viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:text-slate-700'}`}
-                  title="宫格视图"
-                >
-                  <Grid className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-            
-            {viewMode === 'list' ? (
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50/50 border-b border-slate-100 text-xs uppercase tracking-wider text-slate-400 font-semibold">
-                    <th className="p-4 font-medium cursor-pointer hover:text-slate-600 select-none" onClick={() => handleSort('name')}>
-                      名称 {sortConfig.key === 'name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
-                    </th>
-                    <th className="p-4 font-medium hidden sm:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleSort('size')}>
-                      大小 {sortConfig.key === 'size' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
-                    </th>
-                    <th className="p-4 font-medium hidden md:table-cell">状态</th>
-                    <th className="p-4 font-medium hidden md:table-cell cursor-pointer hover:text-slate-600 select-none" onClick={() => handleSort('created_at')}>
-                      上传时间 {sortConfig.key === 'created_at' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
-                    </th>
-                    <th className="p-4"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50 text-sm">
-                  {sortedSubfolders.map((subfolder, idx) => {
-                    const isLastItem = idx === sortedSubfolders.length - 1 && sortedFiles.length === 0;
-                    return (
-                    <tr key={`folder-${subfolder.id}`} onClick={() => navigate(`/folders/${subfolder.id}`)} className="hover:bg-slate-50/50 transition-colors group cursor-pointer">
-                      <td className="p-4 flex items-center">
-                        <div className="w-8 h-8 flex items-center justify-center mr-3 bg-amber-100 rounded-lg">
-                          <Folder className="w-5 h-5 text-amber-600" />
-                        </div>
-                        <span 
-                          className="font-medium text-slate-700 group-hover:text-blue-600 transition-colors"
-                          title={subfolder.name}
-                        >
-                          {subfolder.name}
-                        </span>
-                      </td>
-                      <td className="p-4 text-slate-500 hidden sm:table-cell">文件夹</td>
-                      <td className="p-4 text-slate-500 hidden md:table-cell">-</td>
-                      <td className="p-4 text-slate-500 hidden md:table-cell">-</td>
-                      <td className="p-4 text-right">
-                        <div className="relative inline-flex items-center gap-2">
-                          <FavoriteButton
-                            active={favoriteFolderIds.has(subfolder.id)}
-                            title={favoriteFolderIds.has(subfolder.id) ? '取消收藏文件夹' : '收藏文件夹'}
-                            className={`w-9 h-9 ${getFavoriteButtonVisibility(favoriteFolderIds.has(subfolder.id))}`}
-                            onClick={() => handleToggleFolderFavorite(subfolder.id)}
-                          />
-                          {canEdit && (
-                            <>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenMenuKey((prev) => (prev === `folder-${subfolder.id}` ? null : `folder-${subfolder.id}`));
-                                }}
-                                onMouseDown={(e) => e.stopPropagation()}
-                                className="text-slate-400 hover:text-slate-700 p-1 rounded-md hover:bg-slate-100 transition-colors opacity-0 group-hover:opacity-100"
-                              >
-                                <MoreVertical className="w-4 h-4" />
-                              </button>
-                              {openMenuKey === `folder-${subfolder.id}` ? (
-                                <div
-                                  onClick={(e) => e.stopPropagation()}
-                                  onMouseDown={(e) => e.stopPropagation()}
-                                  className={`absolute right-0 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20 ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
-                                >
-                                  <button
-                                    onClick={() => openRenameDialog({ kind: 'folder', id: subfolder.id, name: subfolder.name })}
-                                    className="w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                                  >
-                                    <PencilLine className="w-4 h-4 text-slate-500" />
-                                    重命名
-                                  </button>
-                                  <button
-                                    onClick={() => openDeleteDialog({ kind: 'folder', id: subfolder.id, name: subfolder.name })}
-                                    className="w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                    删除
-                                  </button>
-                                </div>
-                              ) : null}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );})}
-                  {sortedFiles.map((file, idx) => {
-                    const isLastItem = idx === sortedFiles.length - 1;
-                    return (
-                    <tr key={file.id} onClick={() => navigate(`/files/${file.id}`)} className="hover:bg-slate-50/50 transition-colors group cursor-pointer">
-                      <td className="p-4 flex items-center">
-                        <div className="w-8 h-8 flex items-center justify-center mr-3">
-                          {getFileIcon(file.original_name)}
-                        </div>
-                        <span 
-                          className="font-medium text-slate-700 group-hover:text-blue-600 transition-colors truncate max-w-[200px] sm:max-w-xs"
-                          title={file.original_name}
-                        >
-                          {file.original_name}
-                        </span>
-                      </td>
-                      <td className="p-4 text-slate-500 hidden sm:table-cell">{formatSize(file.size)}</td>
-                      <td className="p-4 text-slate-500 hidden md:table-cell">
-                        {file.preview_status === 'success' && <span className="text-emerald-500 bg-emerald-50 px-2 py-1 rounded text-xs">可预览</span>}
-                        {file.preview_status === 'pending' && <span className="text-amber-500 bg-amber-50 px-2 py-1 rounded text-xs">处理中</span>}
-                        {file.preview_status === 'unsupported' && <span className="text-slate-500 bg-slate-100 px-2 py-1 rounded text-xs">仅下载</span>}
-                      </td>
-                      <td className="p-4 text-slate-500 hidden md:table-cell">{formatDate(file.created_at)}</td>
-                      <td className="p-4 text-right">
-                        <div className="relative inline-flex items-center gap-2">
-                          <FavoriteButton
-                            active={favoriteFileIds.has(file.id)}
-                            title={favoriteFileIds.has(file.id) ? '取消收藏文件' : '收藏文件'}
-                            className={`w-9 h-9 ${getFavoriteButtonVisibility(favoriteFileIds.has(file.id))}`}
-                            onClick={() => handleToggleFileFavorite(file.id)}
-                          />
-                          {canEdit && (
-                            <>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenMenuKey((prev) => (prev === `file-${file.id}` ? null : `file-${file.id}`));
-                                }}
-                                onMouseDown={(e) => e.stopPropagation()}
-                                className="text-slate-400 hover:text-slate-700 p-1 rounded-md hover:bg-slate-100 transition-colors opacity-0 group-hover:opacity-100"
-                              >
-                                <MoreVertical className="w-4 h-4" />
-                              </button>
-                              {openMenuKey === `file-${file.id}` ? (
-                                <div
-                                  onClick={(e) => e.stopPropagation()}
-                                  onMouseDown={(e) => e.stopPropagation()}
-                                  className={`absolute right-0 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20 ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
-                                >
-                                  <button
-                                    onClick={() => openRenameDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
-                                    className="w-full px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 flex items-center gap-2"
-                                  >
-                                    <PencilLine className="w-4 h-4 text-slate-500" />
-                                    重命名
-                                  </button>
-                                  <button
-                                    onClick={() => openDeleteDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
-                                    className="w-full px-3 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
-                                  >
-                                    <Trash2 className="w-4 h-4" />
-                                    删除
-                                  </button>
-                                </div>
-                              ) : null}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );})}
-                </tbody>
-              </table>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-4">
-                {sortedSubfolders.map(subfolder => (
-                  <div 
-                    key={`folder-${subfolder.id}`} 
-                    onClick={() => navigate(`/folders/${subfolder.id}`)} 
-                    className="flex flex-col items-center p-4 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
-                  >
-                    <div className="relative mb-3">
-                      <div className="w-16 h-16 flex items-center justify-center bg-amber-50 rounded-xl group-hover:bg-amber-100 transition-colors">
-                        <Folder className="w-10 h-10 text-amber-500" />
-                      </div>
-                      <FavoriteButton
-                        active={favoriteFolderIds.has(subfolder.id)}
-                        title={favoriteFolderIds.has(subfolder.id) ? '取消收藏文件夹' : '收藏文件夹'}
-                        className={`w-8 h-8 absolute -top-2 -right-2 ${getFavoriteButtonVisibility(favoriteFolderIds.has(subfolder.id))}`}
-                        onClick={() => handleToggleFolderFavorite(subfolder.id)}
-                      />
-                    </div>
-                    <p 
-                      className="text-sm text-center text-slate-700 group-hover:text-blue-600 transition-colors w-full"
-                      style={{
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                      title={subfolder.name}
-                    >
-                      {subfolder.name}
-                    </p>
-                  </div>
-                ))}
-                {sortedFiles.map(file => (
-                  <div 
-                    key={file.id} 
-                    onClick={() => navigate(`/files/${file.id}`)} 
-                    className="flex flex-col items-center p-4 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer group"
-                  >
-                    <div className="relative mb-3">
-                      <div className="w-16 h-16 flex items-center justify-center bg-slate-50 rounded-xl group-hover:bg-blue-50 transition-colors">
-                        {getFileIcon(file.original_name)}
-                      </div>
-                      <FavoriteButton
-                        active={favoriteFileIds.has(file.id)}
-                        title={favoriteFileIds.has(file.id) ? '取消收藏文件' : '收藏文件'}
-                        className={`w-8 h-8 absolute -top-2 -right-2 ${getFavoriteButtonVisibility(favoriteFileIds.has(file.id))}`}
-                        onClick={() => handleToggleFileFavorite(file.id)}
-                      />
-                      {file.preview_status === 'pending' && (
-                        <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-amber-500 rounded-full flex items-center justify-center">
-                          <Loader2 className="w-3 h-3 text-white animate-spin" />
-                        </div>
-                      )}
-                    </div>
-                    <p 
-                      className="text-sm text-center text-slate-700 group-hover:text-blue-600 transition-colors w-full"
-                      style={{
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                      title={file.original_name}
-                    >
-                      {file.original_name}
-                    </p>
-                    <p className="text-xs text-slate-400 mt-1">{formatSize(file.size)}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
+          <LibraryItemsView
+            items={collectionItems}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+            itemCountLabel={`${subfolders.length + files.length} 个项目`}
+            nameColumn={{
+              label: '名称',
+              onClick: () => handleSort('name'),
+              direction: sortConfig.key === 'name' ? sortConfig.direction : null,
+            }}
+            secondaryColumn={false}
+            sizeColumn={{
+              label: '大小',
+              onClick: () => handleSort('size'),
+              direction: sortConfig.key === 'size' ? sortConfig.direction : null,
+            }}
+            statusColumn={{ label: '状态' }}
+            dateColumn={{
+              label: '上传时间',
+              onClick: () => handleSort('created_at'),
+              direction: sortConfig.key === 'created_at' ? sortConfig.direction : null,
+            }}
+            gridClassName="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
+          />
         )}
       </div>
 

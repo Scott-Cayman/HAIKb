@@ -1,52 +1,173 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import ReactMarkdown from 'react-markdown';
-import { Bot, ChevronRight, Download, Eye, FileText, Loader2, Search as SearchIcon } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Sparkles } from 'lucide-react';
 
-import { agentApi, AgentChatResponse } from '../services/agentApi';
-import { BACKEND_BASE_URL } from '../services/backendConfig';
+import { agentApi, AgentChatResponse, RelatedFileItem } from '../services/agentApi';
+import api from '../services/api';
+import SearchComposer from '../components/search/SearchComposer';
+import { RelatedSearchFile } from '../components/search/RelatedFilesStrip';
+import AgentAnswerPanel from '../components/search/AgentAnswerPanel';
+import SearchFilePreviewPanel from '../components/search/SearchFilePreviewPanel';
+import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
 
-const STORAGE_KEY = 'search_page_state';
+const HERO_SUGGESTIONS = ['新人培训流程', '如何使用报销系统', '项目复盘模板', '公司制度有哪些'];
+const SEARCH_PAGE_STORAGE_KEY = 'enterprise-knowledge-drive:ai-search-state';
+
+type SearchPagePersistedState = {
+  query: string;
+  searchType: 'ai' | 'keyword';
+  error: string | null;
+  result: AgentChatResponse | null;
+  relatedFiles: RelatedSearchFile[];
+};
+
+const loadSearchPageState = (): SearchPagePersistedState => {
+  if (typeof window === 'undefined') {
+    return {
+      query: '',
+      searchType: 'ai',
+      error: null,
+      result: null,
+      relatedFiles: [],
+    };
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(SEARCH_PAGE_STORAGE_KEY);
+    if (!raw) {
+      return {
+        query: '',
+        searchType: 'ai',
+        error: null,
+        result: null,
+        relatedFiles: [],
+      };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<SearchPagePersistedState>;
+    return {
+      query: typeof parsed.query === 'string' ? parsed.query : '',
+      searchType: parsed.searchType === 'keyword' ? 'keyword' : 'ai',
+      error: typeof parsed.error === 'string' ? parsed.error : null,
+      result: parsed.result ?? null,
+      relatedFiles: Array.isArray(parsed.relatedFiles) ? parsed.relatedFiles : [],
+    };
+  } catch (error) {
+    console.error('Failed to restore AI search state', error);
+    return {
+      query: '',
+      searchType: 'ai',
+      error: null,
+      result: null,
+      relatedFiles: [],
+    };
+  }
+};
+
+const toDisplayFiles = (files: RelatedFileItem[]) =>
+  files.map((file) => ({
+    ...file,
+    preview_status: 'unsupported',
+    file_ext: null,
+  }));
 
 const Search = () => {
-  const navigate = useNavigate();
-  
-  const [query, setQuery] = useState<string>('');
+  const initialState = loadSearchPageState();
+  const [query, setQuery] = useState<string>(initialState.query);
+  const [searchType, setSearchType] = useState<'ai' | 'keyword'>(initialState.searchType);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AgentChatResponse | null>(null);
+  const [error, setError] = useState<string | null>(initialState.error);
+  const [result, setResult] = useState<AgentChatResponse | null>(initialState.result);
+  const [relatedFiles, setRelatedFiles] = useState<RelatedSearchFile[]>(initialState.relatedFiles);
+  const { loadFavoriteStatus } = useFavoriteStatus();
 
   useEffect(() => {
-    const savedState = localStorage.getItem(STORAGE_KEY);
-    if (savedState) {
-      try {
-        const { query: savedQuery, result: savedResult, error: savedError } = JSON.parse(savedState);
-        setTimeout(() => {
-          if (savedQuery && typeof savedQuery === 'string') setQuery(savedQuery);
-          if (savedResult && typeof savedResult === 'object' && 'answer' in savedResult) {
-            setResult(savedResult);
-          }
-          if (savedError && typeof savedError === 'string') setError(savedError);
-        }, 0);
-      } catch (e) {
-        console.error('Failed to restore search state:', e);
-        localStorage.removeItem(STORAGE_KEY);
-      }
+    if (typeof window === 'undefined') return;
+
+    const hasPersistedState = Boolean(query || error || result || relatedFiles.length > 0);
+    if (!hasPersistedState && searchType === 'ai') {
+      window.sessionStorage.removeItem(SEARCH_PAGE_STORAGE_KEY);
+      return;
     }
-  }, []);
+
+    const stateToPersist: SearchPagePersistedState = {
+      query,
+      searchType,
+      error,
+      result,
+      relatedFiles,
+    };
+    window.sessionStorage.setItem(SEARCH_PAGE_STORAGE_KEY, JSON.stringify(stateToPersist));
+  }, [error, query, relatedFiles, result, searchType]);
 
   useEffect(() => {
-    const stateToSave = { query, result, error };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
-  }, [query, result, error]);
+    const fileIds = relatedFiles.map((file) => file.file_id);
+    if (fileIds.length === 0) return;
 
-  const handleSearch = async () => {
-    if (!query.trim()) return;
+    loadFavoriteStatus({ fileIds }).catch((loadError) => {
+      console.error('Failed to load favorite status', loadError);
+    });
+  }, [relatedFiles, loadFavoriteStatus]);
+
+  useEffect(() => {
+    const enrichRelatedFiles = async () => {
+      const pendingFiles = relatedFiles.filter((file) => !file.preview_status || !file.file_ext);
+      if (pendingFiles.length === 0) return;
+
+      try {
+        const responses = await Promise.all(
+          pendingFiles.map(async (file) => {
+            const response = await api.get(`/files/${file.file_id}`);
+            return {
+              fileId: file.file_id,
+              fileExt: response.data?.file_ext ?? null,
+              previewStatus: response.data?.preview_status ?? 'unsupported',
+              createdAt: response.data?.created_at ?? null,
+              size: response.data?.size ?? null,
+            };
+          }),
+        );
+
+        setRelatedFiles((current) =>
+          current.map((item) => {
+            const matched = responses.find((response) => response.fileId === item.file_id);
+            if (!matched) return item;
+            return {
+              ...item,
+              file_ext: matched.fileExt,
+              preview_status: matched.previewStatus,
+              created_at: matched.createdAt,
+              size: matched.size,
+            };
+          }),
+        );
+      } catch (loadError) {
+        console.error('Failed to enrich related files', loadError);
+      }
+    };
+
+    enrichRelatedFiles();
+  }, [relatedFiles]);
+
+  const runSearch = async (nextQuery: string) => {
+    const trimmedQuery = nextQuery.trim();
+    if (!trimmedQuery) return;
+
+    const conversationId = result?.conversation_id;
+    setQuery(trimmedQuery);
     setLoading(true);
     setError(null);
+    setResult(null);
+    setRelatedFiles([]);
+
     try {
-      const response = await agentApi.chat({ query, top_k: 8, retrieval_mode: 'hybrid' });
+      const response = await agentApi.chat({
+        query: trimmedQuery,
+        conversation_id: conversationId,
+        top_k: 8,
+        retrieval_mode: 'hybrid',
+      });
       setResult(response);
+      setRelatedFiles(toDisplayFiles(response.related_files || []));
     } catch (err: any) {
       if (err?.code === 'ECONNABORTED') {
         setError('AI 检索超时，请稍后重试');
@@ -58,144 +179,88 @@ const Search = () => {
     }
   };
 
-  const renderAnswer = () => {
-    if (!result) return null;
-    return (
-      <article className="prose prose-slate max-w-none text-sm leading-7">
-        <ReactMarkdown>{result.answer}</ReactMarkdown>
-      </article>
-    );
+  const handleSuggestionClick = (value: string) => {
+    setQuery(value);
+    void runSearch(value);
   };
 
-  const renderRelatedFiles = () => {
-    const validFiles = result?.related_files?.filter((file) => file.score > 0) || [];
-    if (validFiles.length === 0) {
-      return <p className="text-sm text-slate-500">暂无推荐文件。</p>;
-    }
-    return (
-      <div className="space-y-4">
-        {validFiles.map((file) => (
-          <div 
-            key={`file-${file.file_id}-${file.summary_id}`} 
-            className="border border-slate-200 rounded-2xl p-5 hover:border-blue-300 transition-colors"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 text-slate-900 font-semibold">
-                  <FileText className="w-4 h-4 text-blue-500" />
-                  <span className="truncate">{file.original_name}</span>
-                </div>
-                <p className="text-sm text-slate-600 mt-3 leading-7">{file.one_line_judgement}</p>
-              </div>
-              <div className="text-right shrink-0">
-                <div className="text-xs text-slate-400">匹配分数</div>
-                <div className="text-lg font-bold text-blue-600">{file.score.toFixed(2)}</div>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-3 mt-4">
-              <button
-                onClick={() => navigate(`/files/${file.file_id}`)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-colors text-sm"
-              >
-                <Eye className="w-4 h-4" />
-                预览原文件
-              </button>
-              <a
-                href={`${BACKEND_BASE_URL}${file.download_url}`}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors text-sm"
-              >
-                <Download className="w-4 h-4" />
-                下载原文件
-              </a>
-              <button
-                onClick={() => navigate(`/files/${file.file_id}`)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 hover:border-slate-300 transition-colors text-sm"
-              >
-                查看 AI 总结
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    );
+  const handleKeywordSearchClick = (value: string) => {
+    if (!value.trim()) return;
+    void runSearch(value);
   };
+
+  const hasSearchState = Boolean(result || loading || error);
 
   return (
-    <div className="space-y-6">
-      <section className="bg-white border border-slate-100 rounded-3xl shadow-sm p-6">
-        <div className="flex items-center space-x-3 mb-4">
-          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
-            <Bot className="w-6 h-6" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">AI 检索与 Agent 问答</h1>
-            <p className="text-sm text-slate-500 mt-1">只基于 AI 总结文档做 RAG，不直接读取原文件全文。</p>
-          </div>
-        </div>
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden py-2 md:py-3">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {!hasSearchState ? (
+          <div className="flex flex-1 flex-col justify-center">
+            <div className="mx-auto w-full max-w-5xl">
+              <div className="px-4 text-center">
+                <div className="inline-flex items-center gap-2 text-[42px] font-black tracking-tight text-slate-900 md:text-[52px]">
+                  <span>AI 搜索</span>
+                  <Sparkles className="h-7 w-7 text-[#63dbe0] md:h-8 md:w-8" />
+                </div>
+                <p className="mt-3 text-sm text-slate-500 md:text-base">用 AI 快速找到你需要的知识和答案</p>
+              </div>
 
-        <div className="flex flex-col lg:flex-row gap-4">
-          <div className="flex-1 relative">
-            <SearchIcon className="w-5 h-5 text-slate-400 absolute left-4 top-4" />
-            <textarea
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              rows={4}
-              placeholder="例如：找文旅类标书、找活动执行案例、找有评分标准的政府项目"
-              className="w-full rounded-2xl border border-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all pl-12 pr-4 py-3 text-sm resize-none"
-            />
-          </div>
-          <div className="lg:w-48 flex lg:flex-col gap-3">
-            <button
-              onClick={handleSearch}
-              disabled={loading || !query.trim()}
-              className="flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors disabled:opacity-60"
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <SearchIcon className="w-4 h-4" />}
-              开始检索
-            </button>
-            <button
-              onClick={() => {
-                setResult(null);
-                setError(null);
-                localStorage.removeItem(STORAGE_KEY);
-              }}
-              className="px-5 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition-colors"
-            >
-              清空结果
-            </button>
-          </div>
-        </div>
-        {error ? <p className="text-sm text-red-500 mt-4">{error}</p> : null}
-      </section>
-
-      <div className="space-y-6">
-        <section className="bg-white border border-slate-100 rounded-3xl shadow-sm p-6 min-h-[220px]">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-slate-900">Agent 回答</h2>
-            {result?.conversation_id ? (
-              <span className="text-xs text-slate-400">会话 ID: {result.conversation_id.slice(0, 8)}</span>
-            ) : null}
-          </div>
-          {loading ? (
-            <div className="flex items-center gap-3 text-slate-500 py-8">
-              <Loader2 className="w-5 h-5 animate-spin" />
-              <span>AI 正在根据总结文档组织答案...</span>
+              <div className="mt-8 md:mt-10">
+                <SearchComposer
+                  mode="hero"
+                  value={query}
+                  loading={loading}
+                  searchType={searchType}
+                  error={error}
+                  suggestions={HERO_SUGGESTIONS}
+                  placeholder="请输入问题、关键词或文件主题，例如：新人入职流程"
+                  onChange={setQuery}
+                  onSearchTypeChange={setSearchType}
+                  onSubmit={(value) => void runSearch(value)}
+                  onSuggestionClick={handleSuggestionClick}
+                  onKeywordSearchClick={handleKeywordSearchClick}
+                />
+              </div>
             </div>
-          ) : result ? (
-            renderAnswer()
-          ) : (
-            <p className="text-slate-500 text-sm">输入问题后，这里会展示匹配结论、推荐文件和注意事项。</p>
-          )}
-        </section>
-
-        <section className="bg-white border border-slate-100 rounded-3xl shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-bold text-slate-900">推荐文件</h2>
-            <span className="text-xs text-slate-400">AI评分 (0.0-1.0，越接近1越相关)</span>
           </div>
-          {renderRelatedFiles()}
-        </section>
+        ) : (
+          <>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <div className="grid h-full w-full gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(340px,31%)]">
+                <div className="min-h-0 overflow-hidden pr-1">
+                  <div className="flex h-full min-h-0 flex-col pb-2 md:pb-3">
+                    <AgentAnswerPanel
+                      answer={result?.answer}
+                      loading={loading}
+                      error={error}
+                      conversationId={result?.conversation_id}
+                    />
+                  </div>
+                </div>
+                <div className="flex h-full min-h-0 flex-col overflow-hidden pb-2 md:pb-3">
+                  <SearchFilePreviewPanel files={relatedFiles} loading={loading} open closable={false} />
+                </div>
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 z-20 mt-auto pb-1 pt-2">
+              <div className="w-full">
+                <SearchComposer
+                  mode="inline"
+                  value={query}
+                  loading={loading}
+                  searchType={searchType}
+                  error={error}
+                  placeholder="继续追问，补充筛选条件或指定想看的文件"
+                  onChange={setQuery}
+                  onSearchTypeChange={setSearchType}
+                  onSubmit={(value) => void runSearch(value)}
+                  onKeywordSearchClick={handleKeywordSearchClick}
+                />
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
