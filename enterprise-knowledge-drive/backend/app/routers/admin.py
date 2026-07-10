@@ -14,6 +14,7 @@ from app.models.setting import SystemSetting
 from app.models.user_file_view import UserFileView
 from app.dependencies.auth import get_current_user, get_current_super_admin, get_current_admin
 from app.routers.auth import get_password_hash
+from app.services.preset_prompt_service import preset_prompt_service
 
 router = APIRouter()
 HOME_APPEARANCE_SETTING_KEY = "home_appearance"
@@ -55,6 +56,36 @@ class HomeAppearanceSettingResponse(BaseModel):
 
 class HomeAppearanceSettingUpdate(BaseModel):
     value: Dict[str, Any]
+
+
+class PresetPromptListItemResponse(BaseModel):
+    id: str
+    name: str
+    scope_type: str
+    department_name: Optional[str] = None
+    relative_path: str
+    description: Optional[str] = None
+    sort_order: int
+    updated_at: Optional[datetime] = None
+    can_edit: bool
+
+
+class PresetPromptDetailResponse(PresetPromptListItemResponse):
+    content: str
+
+
+class PresetPromptCreateRequest(BaseModel):
+    name: str
+    scope_type: str
+    department_name: Optional[str] = None
+    description: Optional[str] = None
+    content: str
+
+
+class PresetPromptUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    content: Optional[str] = None
 
 
 def _get_user_specific_department(user: User) -> Optional[str]:
@@ -136,6 +167,63 @@ def update_home_appearance_setting(
         value=_load_json_setting(setting),
         updated_at=setting.updated_at,
     )
+
+
+@router.get("/settings/preset-prompts", response_model=List[PresetPromptListItemResponse])
+def list_preset_prompts(current_admin: User = Depends(get_current_admin)):
+    return preset_prompt_service.list_presets(current_admin)
+
+
+@router.get("/settings/preset-prompts/{preset_id}", response_model=PresetPromptDetailResponse)
+def get_preset_prompt(preset_id: str, current_admin: User = Depends(get_current_admin)):
+    try:
+        return preset_prompt_service.get_preset(preset_id, current_admin)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.post("/settings/preset-prompts", response_model=PresetPromptDetailResponse)
+def create_preset_prompt(
+    payload: PresetPromptCreateRequest,
+    current_admin: User = Depends(get_current_admin),
+):
+    try:
+        return preset_prompt_service.create_preset(
+            user=current_admin,
+            name=payload.name,
+            scope_type=payload.scope_type,
+            department_name=payload.department_name,
+            description=payload.description,
+            content=payload.content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.put("/settings/preset-prompts/{preset_id}", response_model=PresetPromptDetailResponse)
+def update_preset_prompt(
+    preset_id: str,
+    payload: PresetPromptUpdateRequest,
+    current_admin: User = Depends(get_current_admin),
+):
+    try:
+        return preset_prompt_service.update_preset(
+            preset_id=preset_id,
+            user=current_admin,
+            name=payload.name,
+            description=payload.description,
+            content=payload.content,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 @router.get("/users")
 def get_users(db: Session = Depends(get_db), current_admin: User = Depends(get_current_super_admin)):

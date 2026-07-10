@@ -9,8 +9,18 @@ import AgentAnswerPanel from '../components/search/AgentAnswerPanel';
 import SearchFilePreviewPanel from '../components/search/SearchFilePreviewPanel';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
 
-const HERO_SUGGESTIONS = ['新人培训流程', '如何使用报销系统', '项目复盘模板', '公司制度有哪些'];
+const FALLBACK_SUGGESTIONS = ['新人培训流程', '如何使用报销系统', '项目复盘模板', '公司制度有哪些'];
 const SEARCH_PAGE_STORAGE_KEY = 'enterprise-knowledge-drive:ai-search-state';
+const HERO_SUGGESTION_PAGE_SIZE = 4;
+
+const shuffleSuggestions = (items: string[]) => {
+  const next = [...items];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+};
 
 type SearchPagePersistedState = {
   query: string;
@@ -78,7 +88,30 @@ const Search = () => {
   const [error, setError] = useState<string | null>(initialState.error);
   const [result, setResult] = useState<AgentChatResponse | null>(initialState.result);
   const [relatedFiles, setRelatedFiles] = useState<RelatedSearchFile[]>(initialState.relatedFiles);
+  const [visibleSuggestions, setVisibleSuggestions] = useState<string[]>(shuffleSuggestions(FALLBACK_SUGGESTIONS).slice(0, HERO_SUGGESTION_PAGE_SIZE));
   const { loadFavoriteStatus } = useFavoriteStatus();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSuggestedQuestions = async () => {
+      try {
+        const response = await agentApi.getSuggestedQuestions(12);
+        if (cancelled) return;
+        const nextSuggestions = response.questions?.length ? response.questions : FALLBACK_SUGGESTIONS;
+        setVisibleSuggestions(shuffleSuggestions(nextSuggestions).slice(0, HERO_SUGGESTION_PAGE_SIZE));
+      } catch (loadError) {
+        console.error('Failed to load suggested questions', loadError);
+        if (cancelled) return;
+        setVisibleSuggestions(shuffleSuggestions(FALLBACK_SUGGESTIONS).slice(0, HERO_SUGGESTION_PAGE_SIZE));
+      }
+    };
+
+    void loadSuggestedQuestions();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -212,7 +245,7 @@ const Search = () => {
                   loading={loading}
                   searchType={searchType}
                   error={error}
-                  suggestions={HERO_SUGGESTIONS}
+                  suggestions={visibleSuggestions}
                   placeholder="请输入问题、关键词或文件主题，例如：新人入职流程"
                   onChange={setQuery}
                   onSearchTypeChange={setSearchType}
@@ -234,6 +267,8 @@ const Search = () => {
                       loading={loading}
                       error={error}
                       conversationId={result?.conversation_id}
+                      debugTrace={result?.debug_trace}
+                      relatedFiles={relatedFiles}
                     />
                   </div>
                 </div>

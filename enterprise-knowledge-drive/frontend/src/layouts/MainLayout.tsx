@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore, User } from '../stores/authStore';
 import { Search, Folder, Clock, Star, Settings, LogOut, Cloud } from 'lucide-react';
+import { getTestDepartmentScope, subscribeTestDepartmentScope } from '../services/testDepartmentScope';
 
 // 从完整部门路径中提取二级部门
 const getSecondLevelDepartment = (user: User): string => {
@@ -21,6 +23,11 @@ const MainLayout = () => {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
+  const [testDepartmentScope, setTestDepartmentScope] = useState<string | null>(getTestDepartmentScope());
+
+  useEffect(() => {
+    return subscribeTestDepartmentScope(setTestDepartmentScope);
+  }, []);
 
   const handleLogout = () => {
     logout();
@@ -81,6 +88,9 @@ const MainLayout = () => {
             <div className="ml-3 flex-1 overflow-hidden">
               <p className="text-sm font-medium text-slate-900 truncate">{user?.name}</p>
               <p className="text-xs text-slate-500 truncate">{user ? getSecondLevelDepartment(user) : '成员'}</p>
+              {testDepartmentScope ? (
+                <p className="mt-1 text-[11px] text-indigo-500 truncate">测试作用域：{testDepartmentScope}</p>
+              ) : null}
             </div>
           </div>
           

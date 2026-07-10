@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File as FastAPIFile, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File as FastAPIFile, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import or_
@@ -16,10 +16,13 @@ from app.config import settings
 from app.database import SessionLocal, get_db
 from jose import JWTError, jwt as jose_jwt
 from app.dependencies.auth import get_current_user
+from app.models.document_summary import DocumentSummary
 from app.models.file import File
 from app.models.folder import Folder
 from app.models.user import User
 from app.models.user_file_view import UserFileView
+from app.services.department_scope_service import department_scope_service
+from app.services.folder_access import can_manage_folder_settings, can_view_folder, get_user_specific_department
 from app.services.summary_index_service import generate_summary_and_index_task
 from app.services.folder_summary_service import folder_summary_service
 
@@ -232,6 +235,12 @@ class FileResponseModel(BaseModel):
         from_attributes = True
 
 
+class RecentFileResponseModel(FileResponseModel):
+    region_tags: Optional[str] = None
+    industry_tags: Optional[str] = None
+    keyword_tags: Optional[str] = None
+
+
 class FileUpdateRequest(BaseModel):
     original_name: Optional[str] = None
 
@@ -302,6 +311,7 @@ class RelatedFileItem(BaseModel):
     score: float
     preview_url: str
     download_url: str
+    folder_id: Optional[int] = None
 
 
 class AgentEvidenceItem(BaseModel):
@@ -332,10 +342,14 @@ def unified_search(
     q: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    test_department_name: Optional[str] = Query(default=None),
+    x_test_department_name: Optional[str] = Header(default=None, alias="X-Test-Department-Name"),
 ):
     from app.services.agent_service_optimized import agent_service
 
     response = UnifiedSearchResponse(query=q)
+    requested_department_name = test_department_name or x_test_department_name
+    scoped_user = department_scope_service.build_scoped_user(current_user, requested_department_name)
 
     try:
         agent_result = agent_service.chat(
@@ -343,6 +357,8 @@ def unified_search(
             top_k=8,
             retrieval_mode="hybrid",
             user_id=current_user.id,
+            scoped_user=scoped_user,
+            override_department_name=requested_department_name,
         )
         response.agent = AgentAnswerItem(**agent_result)
     except Exception as e:
@@ -426,6 +442,8 @@ async def upload_file(
         folder = db.query(Folder).filter(Folder.id == target_folder_id, Folder.is_deleted == False).first()
         if not folder:
             raise HTTPException(status_code=404, detail="Folder not found")
+        if not can_manage_folder_settings(db, folder, current_user):
+            raise HTTPException(status_code=403, detail="You don't have permission to upload into this folder")
 
     ext = os.path.splitext(file.filename)[1].lower()
     stored_name = f"{uuid.uuid4()}{ext}"
@@ -467,7 +485,7 @@ async def upload_file(
             is_super_admin_created = folder.is_super_admin_created
     else:
         # 如果不在文件夹中（根目录），使用当前用户的具体部门信息
-        department_name = _get_user_specific_department(current_user)
+        department_name = get_user_specific_department(current_user)
     
     db_file = File(
         folder_id=target_folder_id,
@@ -490,6 +508,8 @@ async def upload_file(
 
     if preview_status == "pending" and ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.pdf")
+        db_file.preview_path = preview_path
+        db.commit()
         background_tasks.add_task(convert_to_pdf, storage_path, preview_path, ext, db_file.id)
 
     if preview_status == "pending" and ext in VIDEO_EXTS and db_file.preview_path:
@@ -499,30 +519,25 @@ async def upload_file(
     return db_file
 
 
-def _get_user_specific_department(user: User) -> Optional[str]:
-    """获取用户的具体部门（优先匹配 跨界营销中心、创意部 等关键部门）"""
-    if user.full_department_path:
-        if "跨界营销中心" in user.full_department_path:
-            return "跨界营销中心"
-        if "创意部" in user.full_department_path or "海口创意设计中心" in user.full_department_path:
-            return "创意部"
-    return user.department_name
-
-
-def _check_file_permission(file: File, current_user: User) -> bool:
+def _check_file_permission(file: File, current_user: User, db: Session) -> bool:
     """检查用户是否有访问文件的权限"""
     if current_user.is_super_admin:
         return True
+    if file.folder_id:
+        folder = db.query(Folder).filter(Folder.id == file.folder_id, Folder.is_deleted == False).first()
+        if folder and can_view_folder(db, folder, current_user):
+            return True
     # 普通用户检查
-    user_department = _get_user_specific_department(current_user)
+    user_department = get_user_specific_department(current_user)
     return file.is_super_admin_created or file.department_name == user_department
 
 
-@router.get("/recent")
+@router.get("/recent", response_model=List[RecentFileResponseModel])
 def get_recent_files(limit: int = 10, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     query = (
-        db.query(File)
+        db.query(File, DocumentSummary)
         .outerjoin(Folder, Folder.id == File.folder_id)
+        .outerjoin(DocumentSummary, DocumentSummary.file_id == File.id)
         .filter(
             File.is_deleted == False,
             or_(File.folder_id == None, Folder.is_deleted == False),
@@ -531,7 +546,7 @@ def get_recent_files(limit: int = 10, db: Session = Depends(get_db), current_use
     
     # 权限检查
     if not current_user.is_super_admin:
-        user_department = _get_user_specific_department(current_user)
+        user_department = get_user_specific_department(current_user)
         query = query.filter(
             or_(
                 File.is_super_admin_created == True,
@@ -539,12 +554,32 @@ def get_recent_files(limit: int = 10, db: Session = Depends(get_db), current_use
             )
         )
     
-    return (
+    rows = (
         query
         .order_by(File.created_at.desc())
         .limit(limit)
         .all()
     )
+
+    results: List[RecentFileResponseModel] = []
+    for file, summary in rows:
+        results.append(
+            RecentFileResponseModel(
+                id=file.id,
+                original_name=file.original_name,
+                file_ext=file.file_ext,
+                size=file.size,
+                folder_id=file.folder_id,
+                preview_status=file.preview_status,
+                summary_status=file.summary_status,
+                uploaded_by=file.uploaded_by,
+                region_tags=summary.region_tags if summary else None,
+                industry_tags=summary.industry_tags if summary else None,
+                keyword_tags=summary.keyword_tags if summary else None,
+            )
+        )
+
+    return results
 
 
 @router.get("/folder/{folder_id}")
@@ -553,10 +588,7 @@ def get_files_in_folder(folder_id: int, db: Session = Depends(get_db), current_u
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     
-    # 检查文件夹权限
-    # 复用文件夹权限检查逻辑
-    user_department = _get_user_specific_department(current_user)
-    if not current_user.is_super_admin and not folder.is_super_admin_created and folder.department_name != user_department:
+    if not can_view_folder(db, folder, current_user):
         raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
     
     return db.query(File).filter(File.folder_id == folder_id, File.is_deleted == False).all()
@@ -569,7 +601,7 @@ def get_file(file_id: int, background_tasks: BackgroundTasks, db: Session = Depe
         raise HTTPException(status_code=404, detail="File not found")
     
     # 权限检查
-    if not _check_file_permission(file, current_user):
+    if not _check_file_permission(file, current_user, db):
         raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
     # 记录用户文件浏览
@@ -601,6 +633,7 @@ def get_file(file_id: int, background_tasks: BackgroundTasks, db: Session = Depe
     if file.preview_status in ["failed", "unsupported"] and file.file_ext in [".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"]:
         preview_path = os.path.join(settings.PREVIEW_DIR, f"{uuid.uuid4()}.pdf")
         file.preview_status = "pending"
+        file.preview_path = preview_path
         db.commit()
         background_tasks.add_task(convert_to_pdf, file.storage_path, preview_path, file.file_ext, file.id)
 
@@ -614,7 +647,7 @@ def download_file(file_id: int, db: Session = Depends(get_db), current_user: Use
         raise HTTPException(status_code=404, detail="File not found")
     
     # 权限检查
-    if not _check_file_permission(file, current_user):
+    if not _check_file_permission(file, current_user, db):
         raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
     file.download_count += 1
@@ -629,7 +662,7 @@ def preview_file(file_id: int, db: Session = Depends(get_db), current_user: User
         raise HTTPException(status_code=404, detail="File not found")
     
     # 权限检查
-    if not _check_file_permission(file, current_user):
+    if not _check_file_permission(file, current_user, db):
         raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
     if file.preview_status != "success":
@@ -660,7 +693,7 @@ def stream_file(file_id: int, token: str, request: Request, db: Session = Depend
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
 
-    if not _check_file_permission(file, user):
+    if not _check_file_permission(file, user, db):
         raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
     path_to_serve = file.preview_path if file.preview_status == "success" and file.preview_path else file.storage_path
@@ -727,7 +760,7 @@ def delete_file(file_id: int, db: Session = Depends(get_db), current_user: User 
         raise HTTPException(status_code=404, detail="File not found")
     
     # 权限检查
-    if not _check_file_permission(file, current_user):
+    if not _check_file_permission(file, current_user, db):
         raise HTTPException(status_code=403, detail="You don't have permission to access this file")
 
     file.is_deleted = True

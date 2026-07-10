@@ -9,6 +9,7 @@ import {
   getHomeAppearanceConfig,
   saveHomeAppearanceConfig,
 } from '../../services/homeAppearance';
+import SystemSettingsTabs from '../../components/admin/SystemSettingsTabs';
 
 type ColorFieldGroup = {
   title: string;
@@ -149,6 +150,7 @@ const Settings = () => {
         <p className="text-xs text-slate-500">
           最近保存时间：{updatedAt ? new Date(updatedAt).toLocaleString() : '尚未保存'}
         </p>
+        <SystemSettingsTabs />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.4fr_0.9fr]">

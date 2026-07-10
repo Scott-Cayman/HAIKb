@@ -1,6 +1,10 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
+from app.config import settings
 from app.database import Base, engine
 from app.models import (
     AgentMessage,
@@ -21,8 +25,10 @@ from app.models import (
 )
 from app.rag.index_manager import index_manager
 from app.routers import admin, agent, auth, favorites, files, folders, rag
+from app.schema_patches import ensure_folder_visual_columns
 
 Base.metadata.create_all(bind=engine)
+ensure_folder_visual_columns(engine)
 
 app = FastAPI(title="Enterprise Knowledge Drive")
 
@@ -38,6 +44,10 @@ app.add_middleware(
 @app.on_event("startup")
 def startup_event():
     index_manager.on_application_startup()
+
+
+Path(settings.STORAGE_DIR, "covers").mkdir(parents=True, exist_ok=True)
+app.mount("/covers", StaticFiles(directory=Path(settings.STORAGE_DIR, "covers")), name="covers")
 
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

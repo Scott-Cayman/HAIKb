@@ -1,4 +1,4 @@
-import { FileText, FolderOpen, Grid2X2, List, Loader2, Search, X } from 'lucide-react';
+import { ChevronDown, FileText, FolderOpen, Grid2X2, List, Loader2, Search, X } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -30,12 +30,33 @@ const SearchFilePreviewPanel = ({
 }: SearchFilePreviewPanelProps) => {
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  const [showAllFiles, setShowAllFiles] = useState(false);
 
   const openFileDetail = (fileId: number) => {
     navigate(`/files/${fileId}`, {
       state: { from: 'search' },
     });
   };
+
+  const openContainingFolder = (fileId: number, folderId?: number | null) => {
+    if (folderId) {
+      navigate(`/folders/${folderId}`, {
+        state: { from: 'search', fileId },
+      });
+      return;
+    }
+
+    openFileDetail(fileId);
+  };
+
+  const visibleFiles = (() => {
+    if (showAllFiles) return files;
+    const sorted = [...files];
+    const strongMatches = sorted.filter((file) => file.score >= 0.72);
+    const fallbackCount = strongMatches.length > 0 ? strongMatches.length : Math.min(3, sorted.length);
+    return sorted.slice(0, fallbackCount);
+  })();
+  const hiddenFilesCount = Math.max(files.length - visibleFiles.length, 0);
 
   if (!open) return null;
 
@@ -96,64 +117,86 @@ const SearchFilePreviewPanel = ({
             当前还没有可预览的相关文件
           </div>
         ) : viewMode === 'grid' ? (
-          <div className="grid grid-cols-2 gap-4">
-            {files.map((file) => {
-              const previewStatus = file.preview_status || 'unsupported';
-              const fileExt = file.file_ext || guessFileExt(file.original_name);
+          <>
+            <div className="grid grid-cols-2 gap-4">
+              {visibleFiles.map((file) => {
+                const previewStatus = file.preview_status || 'unsupported';
+                const fileExt = file.file_ext || guessFileExt(file.original_name);
 
-              return (
-                <article
-                  key={`preview-grid-file-${file.file_id}-${file.summary_id}`}
-                  className="overflow-hidden rounded-[20px] border border-slate-100 bg-white"
+                return (
+                  <article
+                    key={`preview-grid-file-${file.file_id}-${file.summary_id}`}
+                    onClick={() => openFileDetail(file.file_id)}
+                    className="cursor-pointer overflow-hidden rounded-[20px] border border-slate-100 bg-white"
+                  >
+                    <div className="relative bg-slate-50">
+                      <div className="aspect-[4/3] w-full">
+                        <FilePreviewThumbnail
+                          fileId={file.file_id}
+                          fileName={file.original_name}
+                          fileExt={fileExt}
+                          previewStatus={previewStatus}
+                          className="flex h-full w-full items-center justify-center"
+                          imageClassName="h-full w-full object-cover"
+                          fallbackClassName="h-10 w-10 text-slate-400"
+                        />
+                      </div>
+                      <div className="absolute left-2.5 top-2.5">
+                        <FileIconBadge
+                          fileName={file.original_name}
+                          className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/94"
+                          imageClassName="block h-5 w-5 object-contain"
+                          fallbackClassName="h-4 w-4 text-slate-400"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2.5 px-3 py-3">
+                      <div className="line-clamp-2 text-xs font-semibold leading-5 text-slate-800">{file.original_name}</div>
+                      <div className="line-clamp-3 text-[11px] leading-4 text-slate-500">{file.one_line_judgement}</div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <span>相关度 {(file.score * 100).toFixed(0)}%</span>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openContainingFolder(file.file_id, file.folder_id);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full bg-[#effaf7] px-2.5 py-1 text-[#2da99b] transition-colors hover:bg-[#e1f7f2]"
+                          aria-label={`查看文件夹 ${file.original_name}`}
+                          title="打开所属文件夹"
+                        >
+                          <FolderOpen className="h-3 w-3" />
+                          查看
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            {hiddenFilesCount > 0 ? (
+              <div className="mt-4 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowAllFiles(true)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-[#34b8aa] transition-colors hover:border-[#bfece7] hover:bg-[#effaf7]"
                 >
-                  <div className="relative bg-slate-50">
-                    <div className="aspect-[4/3] w-full">
-                      <FilePreviewThumbnail
-                        fileId={file.file_id}
-                        fileName={file.original_name}
-                        fileExt={fileExt}
-                        previewStatus={previewStatus}
-                        className="flex h-full w-full items-center justify-center"
-                        imageClassName="h-full w-full object-cover"
-                        fallbackClassName="h-10 w-10 text-slate-400"
-                      />
-                    </div>
-                    <div className="absolute left-2.5 top-2.5">
-                      <FileIconBadge
-                        fileName={file.original_name}
-                        className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/94"
-                        imageClassName="block h-5 w-5 object-contain"
-                        fallbackClassName="h-4 w-4 text-slate-400"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2.5 px-3 py-3">
-                    <div className="line-clamp-2 text-xs font-semibold leading-5 text-slate-800">{file.original_name}</div>
-                    <div className="line-clamp-3 text-[11px] leading-4 text-slate-500">{file.one_line_judgement}</div>
-                    <div className="flex items-center justify-between text-[10px] text-slate-400">
-                      <span>相关度 {(file.score * 100).toFixed(0)}%</span>
-                      <button
-                        type="button"
-                        onClick={() => openFileDetail(file.file_id)}
-                        className="inline-flex items-center gap-1 rounded-full bg-[#effaf7] px-2.5 py-1 text-[#2da99b] transition-colors hover:bg-[#e1f7f2]"
-                      >
-                        <FolderOpen className="h-3 w-3" />
-                        查看
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+                  查看更多推荐文件
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  <span className="text-slate-400">+{hiddenFilesCount}</span>
+                </button>
+              </div>
+            ) : null}
+          </>
         ) : (
           <div className="overflow-hidden rounded-[20px] border border-slate-100 bg-white">
-            {files.map((file) => {
+            {visibleFiles.map((file) => {
               return (
                 <article
                   key={`preview-file-${file.file_id}-${file.summary_id}`}
-                  className="group flex items-start gap-2.5 border-b border-slate-100 px-3 py-3 last:border-b-0 hover:bg-[#fbfefe]"
+                  onClick={() => openFileDetail(file.file_id)}
+                  className="group flex cursor-pointer items-start gap-2.5 border-b border-slate-100 px-3 py-3 last:border-b-0 hover:bg-[#fbfefe]"
                 >
                   <div className="shrink-0">
                     <FileIconBadge
@@ -176,10 +219,13 @@ const SearchFilePreviewPanel = ({
                       <span>相关度 {(file.score * 100).toFixed(0)}%</span>
                       <button
                         type="button"
-                        onClick={() => openFileDetail(file.file_id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openContainingFolder(file.file_id, file.folder_id);
+                        }}
                         className="inline-flex items-center rounded-full bg-[#effaf7] p-1.5 text-[#2da99b] transition-colors hover:bg-[#e1f7f2]"
-                        aria-label={`查看文件 ${file.original_name}`}
-                        title="查看详情"
+                        aria-label={`查看文件夹 ${file.original_name}`}
+                        title="打开所属文件夹"
                       >
                         <FolderOpen className="h-3 w-3" />
                       </button>
@@ -188,6 +234,19 @@ const SearchFilePreviewPanel = ({
                 </article>
               );
             })}
+            {hiddenFilesCount > 0 ? (
+              <div className="border-t border-slate-100 bg-slate-50/70 px-3 py-3">
+                <button
+                  type="button"
+                  onClick={() => setShowAllFiles(true)}
+                  className="inline-flex w-full items-center justify-center gap-1.5 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-medium text-[#34b8aa] transition-colors hover:border-[#bfece7] hover:bg-[#effaf7]"
+                >
+                  查看更多推荐文件
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  <span className="text-slate-400">+{hiddenFilesCount}</span>
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
       </div>

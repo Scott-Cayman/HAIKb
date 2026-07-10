@@ -25,6 +25,8 @@ import FoldersManage from './pages/admin/FoldersManage';
 import UsageStats from './pages/admin/UsageStats';
 import UsersManage from './pages/admin/UsersManage';
 import RagManage from './pages/admin/RagManage';
+import Settings from './pages/admin/Settings';
+import PresetQuestions from './pages/admin/PresetQuestions';
 
 const ProtectedRoute = ({ children, requireAdmin = false }: { children: React.ReactNode, requireAdmin?: boolean }) => {
   const { isAuthenticated, isLoading, user } = useAuthStore();
@@ -84,7 +86,8 @@ const App = () => {
             <Route path="folders" element={<FoldersManage />} />
             <Route path="usage-stats" element={<UsageStats />} />
             <Route path="users" element={<UsersManage />} />
-            <Route path="settings" element={<Navigate to="/admin" replace />} />
+            <Route path="settings" element={<Settings />} />
+            <Route path="settings/preset-prompts" element={<PresetQuestions />} />
             <Route path="rag" element={<RagManage />} />
           </Route>
         </Routes>

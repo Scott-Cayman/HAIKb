@@ -1,0 +1,20 @@
+[
+  {
+    "id": "group-default",
+    "name": "全集团统一预设问题",
+    "scope_type": "global",
+    "department_name": null,
+    "relative_path": "global/group_default_preset_questions.md",
+    "description": "适用于全集团的统一提示词和通用规则。",
+    "sort_order": 10
+  },
+  {
+    "id": "cross-marketing-center",
+    "name": "跨界营销中心预设问题",
+    "scope_type": "department",
+    "department_name": "跨界营销中心",
+    "relative_path": "departments/cross_marketing_center_preset_questions.md",
+    "description": "跨界营销中心专属的运营指南与常见问题。",
+    "sort_order": 20
+  }
+]
