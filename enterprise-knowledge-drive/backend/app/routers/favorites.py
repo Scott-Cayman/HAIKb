@@ -12,6 +12,12 @@ from app.models.favorite import Favorite
 from app.models.file import File
 from app.models.folder import Folder
 from app.models.user import User
+from app.services.resource_access import (
+    get_file_capabilities,
+    get_folder_capabilities,
+    list_visible_files,
+    list_visible_folders,
+)
 
 router = APIRouter()
 
@@ -69,7 +75,7 @@ def _parse_id_list(raw_value: Optional[str]) -> List[int]:
     return parsed_ids
 
 
-def _ensure_file_exists(db: Session, file_id: int) -> None:
+def _ensure_file_visible(db: Session, file_id: int, current_user: User) -> File:
     file = (
         db.query(File)
         .outerjoin(Folder, Folder.id == File.folder_id)
@@ -82,12 +88,18 @@ def _ensure_file_exists(db: Session, file_id: int) -> None:
     )
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+    if not get_file_capabilities(db, file, current_user).can_view:
+        raise HTTPException(status_code=404, detail="File not found")
+    return file
 
 
-def _ensure_folder_exists(db: Session, folder_id: int) -> None:
+def _ensure_folder_visible(db: Session, folder_id: int, current_user: User) -> Folder:
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
+    if not get_folder_capabilities(db, folder, current_user).can_view:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return folder
 
 
 @router.get("", response_model=List[FavoriteListItem])
@@ -105,26 +117,28 @@ def get_favorites(
     file_ids = [row.file_id for row in favorites if row.file_id is not None]
     folder_ids = [row.folder_id for row in favorites if row.folder_id is not None]
 
+    files = (
+        db.query(File)
+        .outerjoin(Folder, Folder.id == File.folder_id)
+        .filter(
+            File.id.in_(file_ids) if file_ids else False,
+            File.is_deleted == False,
+            or_(File.folder_id == None, Folder.is_deleted == False),
+        )
+        .all()
+    )
     files_by_id = {
         row.id: row
-        for row in (
-            db.query(File)
-            .outerjoin(Folder, Folder.id == File.folder_id)
-            .filter(
-                File.id.in_(file_ids) if file_ids else False,
-                File.is_deleted == False,
-                or_(File.folder_id == None, Folder.is_deleted == False),
-            )
-            .all()
-        )
+        for row in list_visible_files(db, files, current_user)
     }
+    folders = (
+        db.query(Folder)
+        .filter(Folder.id.in_(folder_ids) if folder_ids else False, Folder.is_deleted == False)
+        .all()
+    )
     folders_by_id = {
         row.id: row
-        for row in (
-            db.query(Folder)
-            .filter(Folder.id.in_(folder_ids) if folder_ids else False, Folder.is_deleted == False)
-            .all()
-        )
+        for row in list_visible_folders(db, folders, current_user)
     }
 
     items: List[FavoriteListItem] = []
@@ -186,7 +200,7 @@ def get_favorite_status(
     favorite_folder_ids: List[int] = []
 
     if parsed_file_ids:
-        favorite_file_ids = [
+        candidate_file_ids = [
             row[0]
             for row in db.query(Favorite.file_id)
             .filter(
@@ -196,9 +210,20 @@ def get_favorite_status(
             .all()
             if row[0] is not None
         ]
+        candidate_files = (
+            db.query(File)
+            .outerjoin(Folder, Folder.id == File.folder_id)
+            .filter(
+                File.id.in_(candidate_file_ids) if candidate_file_ids else False,
+                File.is_deleted == False,
+                or_(File.folder_id == None, Folder.is_deleted == False),
+            )
+            .all()
+        )
+        favorite_file_ids = [row.id for row in list_visible_files(db, candidate_files, current_user)]
 
     if parsed_folder_ids:
-        favorite_folder_ids = [
+        candidate_folder_ids = [
             row[0]
             for row in db.query(Favorite.folder_id)
             .filter(
@@ -208,6 +233,15 @@ def get_favorite_status(
             .all()
             if row[0] is not None
         ]
+        candidate_folders = (
+            db.query(Folder)
+            .filter(
+                Folder.id.in_(candidate_folder_ids) if candidate_folder_ids else False,
+                Folder.is_deleted == False,
+            )
+            .all()
+        )
+        favorite_folder_ids = [row.id for row in list_visible_folders(db, candidate_folders, current_user)]
 
     return {
         "favorite_file_ids": favorite_file_ids,
@@ -221,7 +255,7 @@ def favorite_file(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ensure_file_exists(db, file_id)
+    _ensure_file_visible(db, file_id, current_user)
 
     favorite = (
         db.query(Favorite)
@@ -270,7 +304,7 @@ def favorite_folder(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ensure_folder_exists(db, folder_id)
+    _ensure_folder_visible(db, folder_id, current_user)
 
     favorite = (
         db.query(Favorite)

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Iterator, List, Optional, Union
 
 import httpx
 
@@ -64,6 +65,51 @@ class LLMService:
 
         message = choices[0].get("message") or {}
         return (message.get("content") or "").strip()
+
+    def chat_stream(
+        self,
+        messages: List[dict],
+        temperature: float = 0.2,
+        max_tokens: int = 1800,
+    ) -> Iterator[str]:
+        """Yield OpenAI-compatible chat deltas as they arrive."""
+        if not self.is_configured():
+            raise RuntimeError("LLM 未配置")
+
+        url = settings.effective_llm_base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {settings.effective_llm_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": settings.effective_llm_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        with httpx.Client(timeout=settings.effective_llm_timeout) as client:
+            with client.stream("POST", url, headers=headers, json=payload) as response:
+                response.raise_for_status()
+                for raw_line in response.iter_lines():
+                    line = (raw_line or "").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_text = line[5:].strip()
+                    if data_text == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(data_text)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = data.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    content = delta.get("content") or ""
+                    if content:
+                        yield content
 
     def chat_with_image(
         self,

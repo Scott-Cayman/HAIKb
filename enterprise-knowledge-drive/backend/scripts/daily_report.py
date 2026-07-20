@@ -102,9 +102,17 @@ def check_backend_health(url: str = "http://127.0.0.1:9090/health", timeout: int
 # ==================== 业务数据统计（轻量 SQL 查询）====================
 
 def get_database_url() -> str:
-    """获取数据库连接 URL"""
+    """Return the mandatory PostgreSQL connection URL."""
+    database_url = get_config("DATABASE_URL")
+    if database_url:
+        if not database_url.lower().startswith(("postgresql://", "postgresql+psycopg2://")):
+            raise RuntimeError("DATABASE_URL must use PostgreSQL.")
+        return database_url
+
     postgres_url = get_config("POSTGRES_URL")
     if postgres_url:
+        if not postgres_url.lower().startswith(("postgresql://", "postgresql+psycopg2://")):
+            raise RuntimeError("POSTGRES_URL must use PostgreSQL.")
         return postgres_url
     pg_user = get_config("POSTGRES_USER")
     pg_pass = get_config("POSTGRES_PASSWORD")
@@ -112,10 +120,14 @@ def get_database_url() -> str:
     pg_port = get_config("POSTGRES_PORT", "5432")
     pg_db = get_config("POSTGRES_DB")
     if pg_user and pg_db:
-        return f"postgresql+psycopg2://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}"
-    # fallback 到 SQLite
-    db_path = get_config("DATABASE_URL", "sqlite:////home/HAIKB/enterprise-knowledge-drive/backend/data/app.db")
-    return db_path
+        encoded_user = urllib.parse.quote_plus(pg_user)
+        encoded_password = urllib.parse.quote_plus(pg_pass)
+        encoded_database = urllib.parse.quote_plus(pg_db)
+        return (
+            f"postgresql+psycopg2://{encoded_user}:{encoded_password}"
+            f"@{pg_host}:{pg_port}/{encoded_database}"
+        )
+    raise RuntimeError("PostgreSQL configuration is missing.")
 
 
 def collect_business_stats() -> dict:

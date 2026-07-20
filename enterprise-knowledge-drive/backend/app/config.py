@@ -1,17 +1,17 @@
 from pathlib import Path
+from urllib.parse import quote_plus
+
 from pydantic_settings import BaseSettings
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = BASE_DIR.parent
-DEFAULT_DATA_DIR = PROJECT_ROOT / 'data'
 DEFAULT_STORAGE_DIR = PROJECT_ROOT / 'storage'
 DEFAULT_PREVIEW_DIR = DEFAULT_STORAGE_DIR / 'previews'
 DEFAULT_SUMMARY_DIR = DEFAULT_STORAGE_DIR / 'summaries'
 DEFAULT_RAG_DIR = DEFAULT_STORAGE_DIR / 'rag'
 DEFAULT_RAG_VECTOR_DIR = DEFAULT_RAG_DIR / 'vectors'
 DEFAULT_RAG_DOC_DIR = DEFAULT_RAG_DIR / 'docs'
-DEFAULT_DATABASE_URL = f"sqlite:///{(DEFAULT_DATA_DIR / 'app.db').resolve()}"
 
 
 class Settings(BaseSettings):
@@ -36,7 +36,10 @@ class Settings(BaseSettings):
     POSTGRES_PORT: str = ''
     POSTGRES_DB: str = ''
     POSTGRES_URL: str = ''
-    DATABASE_URL: str = DEFAULT_DATABASE_URL
+    # PostgreSQL is the only supported runtime database. DATABASE_URL remains
+    # as a compatibility input for deployment platforms, but SQLite URLs are
+    # rejected by effective_database_url.
+    DATABASE_URL: str = ''
 
     STORAGE_DIR: str = str(DEFAULT_STORAGE_DIR)
     PREVIEW_DIR: str = str(DEFAULT_PREVIEW_DIR)
@@ -44,6 +47,9 @@ class Settings(BaseSettings):
     RAG_DATA_DIR: str = str(DEFAULT_RAG_DIR)
     RAG_VECTOR_DIR: str = str(DEFAULT_RAG_VECTOR_DIR)
     RAG_DOC_DIR: str = str(DEFAULT_RAG_DOC_DIR)
+    # Keep this aligned with Nginx client_max_body_size.  A backend-side limit
+    # also protects direct LAN/Vite uploads that do not pass through Nginx.
+    MAX_UPLOAD_SIZE_MB: int = 2048
 
     LLM_BASE_URL: str = ''
     LLM_API_KEY: str = ''
@@ -62,6 +68,25 @@ class Settings(BaseSettings):
     OLLAMA_VISION_MODEL: str = 'gemma4:e4b'
     OLLAMA_TIMEOUT_SECONDS: int = 60
 
+    EMBEDDING_PROVIDER: str = 'ollama'
+    EMBEDDING_BASE_URL: str = ''
+    EMBEDDING_API_KEY: str = ''
+    EMBEDDING_MODEL: str = 'dengcao/Qwen3-Embedding-8B:Q8_0'
+    EMBEDDING_SOURCE_DIMENSIONS: int = 4096
+    EMBEDDING_DIMENSIONS: int = 1024
+    EMBEDDING_BATCH_SIZE: int = 8
+    EMBEDDING_TIMEOUT_SECONDS: int = 180
+
+    PRESET_RERANKER_ENABLED: bool = False
+    PRESET_RERANKER_MODEL: str = 'dengcao/Qwen3-Reranker-8B:Q8_0'
+    PRESET_RERANKER_TIMEOUT_SECONDS: int = 8
+    PRESET_SEMANTIC_THRESHOLD: float = 0.68
+    PRESET_SEMANTIC_MARGIN: float = 0.04
+
+    PREVIEW_WORKER_CONCURRENCY: int = 2
+    THUMBNAIL_PROCESSING_STALE_SECONDS: int = 30 * 60
+    THUMBNAIL_FAILED_RETRY_SECONDS: int = 15 * 60
+
     VECTOR_STORE: str = 'local'
     VECTOR_COLLECTION_PREFIX: str = 'haikb_summary'
     AGENT_REASONING_MODE: str = 'simple'
@@ -73,11 +98,24 @@ class Settings(BaseSettings):
 
     @property
     def effective_database_url(self):
-        if self.POSTGRES_URL:
-            return self.POSTGRES_URL
+        candidate = (self.POSTGRES_URL or self.DATABASE_URL or '').strip()
+        if candidate:
+            if not candidate.startswith(('postgresql://', 'postgresql+psycopg2://', 'postgresql+psycopg://')):
+                raise RuntimeError('HAIKB requires PostgreSQL; SQLite and other database backends are disabled.')
+            return candidate
+
         if self.POSTGRES_USER and self.POSTGRES_DB:
-            return f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        return self.DATABASE_URL
+            username = quote_plus(self.POSTGRES_USER)
+            password = quote_plus(self.POSTGRES_PASSWORD)
+            host = self.POSTGRES_HOST or '127.0.0.1'
+            port = self.POSTGRES_PORT or '5432'
+            database = quote_plus(self.POSTGRES_DB)
+            return f"postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}"
+
+        raise RuntimeError(
+            'PostgreSQL is not configured. Set POSTGRES_URL, DATABASE_URL with a PostgreSQL URL, '
+            'or the POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_HOST/POSTGRES_PORT/POSTGRES_DB fields.'
+        )
 
     @property
     def effective_llm_base_url(self):
@@ -95,6 +133,10 @@ class Settings(BaseSettings):
     def effective_llm_timeout(self):
         return self.ARK_TIMEOUT_SECONDS or self.LLM_TIMEOUT_SECONDS
 
+    @property
+    def effective_embedding_base_url(self):
+        return (self.EMBEDDING_BASE_URL or self.OLLAMA_BASE_URL).rstrip('/')
+
 
 settings = Settings()
 
@@ -109,4 +151,3 @@ for path_str in [
     Path(path_str).mkdir(parents=True, exist_ok=True)
 
 Path(settings.STORAGE_DIR, 'originals').mkdir(parents=True, exist_ok=True)
-Path(PROJECT_ROOT, 'data').mkdir(parents=True, exist_ok=True)

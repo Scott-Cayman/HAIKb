@@ -59,9 +59,9 @@ const UsageStats = () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-8">
+      <div className="mb-6 flex items-center justify-between md:mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
+          <h1 className="flex items-center gap-3 text-2xl font-bold tracking-tight text-white md:text-3xl">
             <BarChart3 className="w-8 h-8 text-indigo-400" />
             数据检测
           </h1>
@@ -70,11 +70,11 @@ const UsageStats = () => {
       </div>
 
       {/* 时间筛选 */}
-      <div className="bg-slate-800 border border-slate-700 rounded-2xl shadow-lg p-6 mb-6">
-        <div className="flex items-center gap-4">
+      <div className="mb-6 rounded-2xl border border-slate-700 bg-slate-800 p-4 shadow-lg md:p-6">
+        <div className="flex flex-wrap items-center gap-3 md:gap-4">
           <Calendar className="w-5 h-5 text-slate-400" />
           <span className="text-slate-300 font-medium">时间范围:</span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {['all', '7d', '30d'].map((range) => (
               <button
                 key={range}

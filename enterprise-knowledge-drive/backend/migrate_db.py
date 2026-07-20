@@ -1,19 +1,18 @@
-import sqlite3
+"""Compatibility entry point for PostgreSQL schema migrations."""
 
-conn = sqlite3.connect('./data/app.db')
-cursor = conn.cursor()
+from __future__ import annotations
 
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN username VARCHAR;")
-    print("Added username column")
-except Exception as e:
-    print(e)
+import subprocess
+from pathlib import Path
 
-try:
-    cursor.execute("ALTER TABLE users ADD COLUMN hashed_password VARCHAR;")
-    print("Added hashed_password column")
-except Exception as e:
-    print(e)
 
-conn.commit()
-conn.close()
+def main() -> int:
+    backend_root = Path(__file__).resolve().parent
+    return subprocess.call(
+        [str(backend_root / ".venv" / "bin" / "alembic"), "upgrade", "head"],
+        cwd=backend_root,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

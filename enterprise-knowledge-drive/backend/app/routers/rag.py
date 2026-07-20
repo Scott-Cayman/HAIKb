@@ -16,11 +16,32 @@ from app.models.rag_index import RagIndex, RagSource, SummaryChunk
 from app.models.user import User
 from app.rag.index_manager import index_manager
 from app.services.batch_summary_service import batch_summary_service
+from app.services.resource_access import get_file_capabilities
 from app.services.summary_generator import summary_generator_service
 from app.services.summary_index_service import summary_index_service
 
 
 router = APIRouter()
+
+
+def _require_admin(current_user: User) -> None:
+    if not (current_user.is_admin or current_user.is_super_admin):
+        raise HTTPException(status_code=403, detail="仅管理员可执行此操作")
+
+
+def _get_file_for_capability(
+    db: Session,
+    file_id: int,
+    current_user: User,
+    capability: str,
+) -> File:
+    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
+    if not file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    capabilities = get_file_capabilities(db, file, current_user)
+    if not getattr(capabilities, capability, False):
+        raise HTTPException(status_code=403, detail="您没有操作此文件的权限")
+    return file
 
 
 class ManualSummaryRequest(BaseModel):
@@ -42,6 +63,7 @@ class BatchSummaryRequest(BaseModel):
 
 @router.get("/indices")
 def get_indices(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
     indices = db.query(RagIndex).order_by(RagIndex.id.asc()).all()
     payload = []
     for index in indices:
@@ -62,6 +84,8 @@ def get_indices(db: Session = Depends(get_db), current_user: User = Depends(get_
 
 @router.post("/indices/default/rebuild")
 def rebuild_default_index(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if not current_user.is_super_admin:
+        raise HTTPException(status_code=403, detail="仅超级管理员可以重建全局索引")
     index = index_manager.get_default_index()
     pipeline = index.get_indexing_pipeline(settings={"retrieval_mode": "hybrid"})
     pipeline.reset_index()
@@ -76,9 +100,7 @@ def rebuild_default_index(db: Session = Depends(get_db), current_user: User = De
 
 @router.post("/files/{file_id}/summarize")
 def summarize_file(file_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file = _get_file_for_capability(db, file_id, current_user, "can_edit")
     
     file.summary_status = "processing"
     file.summary_error = None
@@ -91,10 +113,21 @@ def summarize_file(file_id: int, background_tasks: BackgroundTasks, db: Session 
 @router.post("/files/batch-summarize")
 def batch_summarize_files(
     payload: BatchSummaryRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    normalized_file_ids = list(dict.fromkeys(payload.file_ids))
+    files = db.query(File).filter(
+        File.id.in_(normalized_file_ids) if normalized_file_ids else False,
+        File.is_deleted == False,
+    ).all()
+    files_by_id = {file.id: file for file in files}
+    if len(files_by_id) != len(normalized_file_ids):
+        raise HTTPException(status_code=404, detail="部分文件不存在或已删除")
+    if any(not get_file_capabilities(db, file, current_user).can_edit for file in files):
+        raise HTTPException(status_code=403, detail="您没有生成部分文件总结的权限")
     try:
-        return batch_summary_service.create_task(payload.file_ids)
+        return batch_summary_service.create_task(normalized_file_ids, owner_user_id=current_user.id)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -105,7 +138,11 @@ def get_batch_summary_task(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return batch_summary_service.get_task_status(task_id)
+        return batch_summary_service.get_task_status(
+            task_id,
+            owner_user_id=current_user.id,
+            is_super_admin=current_user.is_super_admin,
+        )
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -116,9 +153,7 @@ def get_file_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file = _get_file_for_capability(db, file_id, current_user, "can_view")
 
     summary = db.query(DocumentSummary).filter(DocumentSummary.file_id == file_id).first()
     return {
@@ -173,9 +208,7 @@ def update_file_tags(
 
 @router.post("/files/{file_id}/reindex-summary")
 def reindex_summary(file_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file = _get_file_for_capability(db, file_id, current_user, "can_edit")
     
     file.summary_status = "processing"
     file.summary_error = None
@@ -194,9 +227,7 @@ def save_manual_summary(
     current_user: User = Depends(get_current_user),
 ):
     """手动保存总结（用于视频等不支持自动解析的格式）"""
-    file = db.query(File).filter(File.id == file_id, File.is_deleted == False).first()
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file = _get_file_for_capability(db, file_id, current_user, "can_edit")
 
     if not payload.summary_text.strip():
         raise HTTPException(status_code=400, detail="总结内容不能为空")
@@ -308,6 +339,7 @@ def save_manual_summary(
 
 @router.get("/status")
 def get_rag_status(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    _require_admin(current_user)
     file_summary_stats = {
         status: count
         for status, count in db.query(File.summary_status, func.count(File.id)).group_by(File.summary_status).all()

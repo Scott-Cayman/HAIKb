@@ -1,14 +1,31 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, File, Upload, MoreVertical, CheckCircle, XCircle, Loader2, Folder, PencilLine, Trash2, X, Settings2 } from 'lucide-react';
-import api, { LONG_TIMEOUT } from '../services/api';
+import { ArrowLeft, File, Upload, UploadCloud, MoreVertical, CheckCircle, XCircle, Loader2, Folder, PencilLine, Trash2, X, Settings2, Sparkles } from 'lucide-react';
+import api from '../services/api';
 import { ragApi, type BatchSummaryTaskResponse } from '../services/ragApi';
 import FavoriteButton from '../components/FavoriteButton';
+import InlineItemMenu from '../components/library/InlineItemMenu';
 import LibraryItemsView from '../components/library/LibraryItemsView';
 import type { CollectionItem } from '../components/library/types';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
 import { formatDate, formatSize } from '../utils';
-import { useAuthStore } from '../stores/authStore';
+import {
+  collectDroppedUpload,
+  createUploadCandidates,
+  deriveDirectoryPaths,
+  type UploadCandidate,
+} from '../services/uploadDrop';
+type ResourceCapabilities = {
+  can_view: boolean;
+  can_download: boolean;
+  can_edit: boolean;
+  can_rename: boolean;
+  can_delete: boolean;
+  can_upload: boolean;
+  can_manage_settings: boolean;
+  can_manage_permissions: boolean;
+  can_pin_children: boolean;
+};
 
 interface FolderType {
   id: number;
@@ -20,6 +37,7 @@ interface FolderType {
   icon_bg_to?: string | null;
   icon_color?: string | null;
   can_manage_settings?: boolean;
+  capabilities?: ResourceCapabilities;
 }
 
 interface FileType {
@@ -28,7 +46,13 @@ interface FileType {
   size: number;
   created_at: string;
   preview_status: string;
+  thumbnail_status?: string | null;
+  preview_kind?: string | null;
+  preview_page_count?: number;
+  preview_error?: string | null;
   folder_id: number | null;
+  file_ext?: string | null;
+  capabilities?: ResourceCapabilities;
 }
 
 interface SubFolder {
@@ -40,6 +64,7 @@ interface SubFolder {
   icon_bg_to?: string | null;
   icon_color?: string | null;
   can_manage_settings?: boolean;
+  capabilities?: ResourceCapabilities;
 }
 
 interface UploadItem {
@@ -61,17 +86,19 @@ type ActionTarget =
 const FolderDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user } = useAuthStore();
-  const canManageFiles = !!user?.is_admin || !!user?.is_super_admin;
   const [folder, setFolder] = useState<FolderType | null>(null);
   const [subfolders, setSubfolders] = useState<SubFolder[]>([]);
   const [files, setFiles] = useState<FileType[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
+  const [pendingDirectoryPaths, setPendingDirectoryPaths] = useState<string[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isDragActive, setIsDragActive] = useState(false);
   const [showUploadPanel, setShowUploadPanel] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
   const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<ActionTarget | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -79,7 +106,8 @@ const FolderDetail = () => {
   const [actionLoading, setActionLoading] = useState(false);
   const [summaryTask, setSummaryTask] = useState<BatchSummaryTaskResponse | null>(null);
   const summaryPollTimerRef = useRef<number | null>(null);
-  const [sortConfig, setSortConfig] = useState<{ key: 'name' | 'original_name' | 'size' | 'created_at'; direction: 'asc' | 'desc' }>({
+  const [showFolderActions, setShowFolderActions] = useState(false);
+  const [sortConfig, setSortConfig] = useState<{ key: 'name' | 'original_name' | 'file_ext' | 'size' | 'created_at'; direction: 'asc' | 'desc' }>({
     key: 'name',
     direction: 'asc'
   });
@@ -87,6 +115,10 @@ const FolderDetail = () => {
   const fetchPromiseRef = useRef<Promise<void> | null>(null);
   const lastFetchedIdRef = useRef<string | null>(null);
   const { favoriteFileIds, favoriteFolderIds, loadFavoriteStatus, toggleFileFavorite, toggleFolderFavorite } = useFavoriteStatus();
+  const canUploadToCurrentFolder = !!folder?.capabilities?.can_upload;
+  const canManageCurrentFolder = !!folder?.capabilities?.can_manage_settings;
+  const canRenameCurrentFolder = !!folder?.capabilities?.can_rename;
+  const canDeleteCurrentFolder = !!folder?.capabilities?.can_delete;
 
   const fetchFolderData = async () => {
     if (!id || fetching) return;
@@ -120,6 +152,13 @@ const FolderDetail = () => {
     window.addEventListener('mousedown', onMouseDown);
     return () => window.removeEventListener('mousedown', onMouseDown);
   }, [openMenuKey]);
+
+  useEffect(() => {
+    if (!showFolderActions) return;
+    const onMouseDown = () => setShowFolderActions(false);
+    window.addEventListener('mousedown', onMouseDown);
+    return () => window.removeEventListener('mousedown', onMouseDown);
+  }, [showFolderActions]);
 
   useEffect(() => {
     return () => {
@@ -196,19 +235,37 @@ const FolderDetail = () => {
     }
   };
 
-  const processFiles = useCallback((items: FileList | File[]) => {
-    const newItems: UploadItem[] = Array.from(items).map((file) => ({
+  const processUploadCandidates = useCallback((candidates: UploadCandidate[], directories: string[] = []) => {
+    const newItems: UploadItem[] = candidates.map(({ file, relativePath }) => ({
       id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      file: file as File,
-      relativePath: (file as any).webkitRelativePath || file.name,
+      file,
+      relativePath,
       status: 'pending' as const,
       progress: 0,
     }));
 
-    setUploadQueue(prev => [...prev, ...newItems]);
+    setUploadQueue(prev => {
+      const existingKeys = new Set(prev.map((item) => `${item.relativePath}:${item.file.size}:${item.file.lastModified}`));
+      return [
+        ...prev,
+        ...newItems.filter((item) => {
+          const key = `${item.relativePath}:${item.file.size}:${item.file.lastModified}`;
+          if (existingKeys.has(key)) return false;
+          existingKeys.add(key);
+          return true;
+        }),
+      ];
+    });
+    setPendingDirectoryPaths((prev) => Array.from(new Set([...prev, ...directories])));
+    setUploadError(null);
     setShowUploadPanel(true);
     return newItems;
   }, []);
+
+  const processFiles = useCallback((items: FileList | File[]) => {
+    const candidates = createUploadCandidates(items);
+    return processUploadCandidates(candidates, deriveDirectoryPaths(candidates));
+  }, [processUploadCandidates]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -222,6 +279,71 @@ const FolderDetail = () => {
       processFiles(e.target.files);
     }
     e.target.value = '';
+  };
+
+  const ensureDirectoryPaths = useCallback(async (paths: string[]) => {
+    if (!id || paths.length === 0) return;
+    await api.post('/folders/ensure-upload-paths', {
+      parent_id: Number(id),
+      paths,
+    });
+  }, [id]);
+
+  const isFileDrag = (event: React.DragEvent<HTMLDivElement>) =>
+    Array.from(event.dataTransfer.types).includes('Files');
+
+  const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    dragDepthRef.current += 1;
+    if (canUploadToCurrentFolder && !isUploading && !isSummaryRunning) {
+      setIsDragActive(true);
+    }
+  };
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = canUploadToCurrentFolder && !isUploading && !isSummaryRunning ? 'copy' : 'none';
+  };
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragActive(false);
+  };
+
+  const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragActive(false);
+    if (!canUploadToCurrentFolder || isUploading || isSummaryRunning) {
+      setUploadError('您没有向当前目录上传内容的权限');
+      return;
+    }
+
+    try {
+      const dropped = await collectDroppedUpload(event.dataTransfer);
+      if (!dropped.files.length && !dropped.directories.length) {
+        setUploadError('没有识别到可上传的文件或文件夹');
+        return;
+      }
+      if (dropped.files.length === 0) {
+        setIsUploading(true);
+        await ensureDirectoryPaths(dropped.directories);
+        setPendingDirectoryPaths([]);
+        setUploadError(null);
+        await fetchFolderData();
+        return;
+      }
+      processUploadCandidates(dropped.files, dropped.directories);
+    } catch (error: any) {
+      setUploadError(error?.response?.data?.detail || error?.message || '读取拖入的文件夹失败');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const pollSummaryTask = useCallback(async (taskId: string) => {
@@ -299,14 +421,20 @@ const FolderDetail = () => {
 
     try {
       setUploadQueue(prev => prev.map(u => 
-        u.id === item.id ? { ...u, status: 'uploading', progress: 50 } : u
+        u.id === item.id ? { ...u, status: 'uploading', progress: 0 } : u
       ));
       
       const response = await api.post('/files/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
-        timeout: LONG_TIMEOUT,
+        timeout: 0,
+        onUploadProgress: (event) => {
+          const progress = event.total ? Math.round((event.loaded / event.total) * 100) : 0;
+          setUploadQueue(prev => prev.map(u =>
+            u.id === item.id ? { ...u, status: 'uploading', progress } : u
+          ));
+        },
       });
 
       setUploadQueue(prev => prev.map(u => 
@@ -359,11 +487,27 @@ const FolderDetail = () => {
 
   const startUpload = async () => {
     const pendingItems = uploadQueue.filter(u => u.status === 'pending');
-    if (pendingItems.length === 0) return;
+    if (pendingItems.length === 0 && pendingDirectoryPaths.length === 0) return;
 
     setIsUploading(true);
     setSummaryTask(null);
+    setUploadError(null);
     const uploadedFileIds: number[] = [];
+
+    try {
+      await ensureDirectoryPaths(pendingDirectoryPaths);
+      setPendingDirectoryPaths([]);
+    } catch (error: any) {
+      setUploadError(error?.response?.data?.detail || '创建上传目录失败');
+      setIsUploading(false);
+      return;
+    }
+
+    if (pendingItems.length === 0) {
+      setIsUploading(false);
+      await fetchFolderData();
+      return;
+    }
 
     for (const item of pendingItems) {
       const uploadedFileId = await uploadFile(item);
@@ -421,7 +565,7 @@ const FolderDetail = () => {
     setSummaryTask(null);
   };
 
-  const handleSort = (key: 'name' | 'original_name' | 'size' | 'created_at') => {
+  const handleSort = (key: 'name' | 'original_name' | 'file_ext' | 'size' | 'created_at') => {
     setSortConfig(prev => ({
       key,
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
@@ -438,7 +582,11 @@ const FolderDetail = () => {
   const sortedFiles = [...files].sort((a, b) => {
     let comparison: number;
     
-    if (sortConfig.key === 'original_name') {
+    if (sortConfig.key === 'file_ext') {
+      const leftExt = (a.file_ext || (a.original_name.includes('.') ? a.original_name.split('.').pop() : '') || '').replace(/^\./, '').toLowerCase();
+      const rightExt = (b.file_ext || (b.original_name.includes('.') ? b.original_name.split('.').pop() : '') || '').replace(/^\./, '').toLowerCase();
+      comparison = naturalCollator.compare(leftExt, rightExt) || naturalCollator.compare(a.original_name, b.original_name);
+    } else if (sortConfig.key === 'original_name') {
       comparison = naturalCollator.compare(a.original_name, b.original_name);
     } else if (sortConfig.key === 'size') {
       comparison = a.size - b.size;
@@ -537,79 +685,32 @@ const FolderDetail = () => {
     };
   });
 
-  const fileCollectionItems: CollectionItem[] = sortedFiles.map((file, idx) => {
-    const isLastItem = idx === sortedFiles.length - 1;
-
+  const fileCollectionItems: CollectionItem[] = sortedFiles.map((file) => {
     return {
       kind: 'file',
       id: file.id,
       name: file.original_name,
       onOpen: () => navigate(`/files/${file.id}`),
+      secondaryLabel: (file.file_ext || (file.original_name.includes('.') ? file.original_name.split('.').pop() : '') || '文件').replace(/^\./, '').toUpperCase(),
       sizeLabel: formatSize(file.size),
       dateLabel: formatDate(file.created_at),
       previewStatus: file.preview_status,
-      statusLabel:
-        file.preview_status === 'success'
-          ? '可预览'
-          : file.preview_status === 'pending'
-            ? '处理中'
-            : '仅下载',
-      statusTone:
-        file.preview_status === 'success'
-          ? 'success'
-          : file.preview_status === 'pending'
-            ? 'warning'
-            : 'neutral',
+      thumbnailStatus: file.thumbnail_status,
+      fileExt: file.file_ext,
       favorite: {
         active: favoriteFileIds.has(file.id),
         title: favoriteFileIds.has(file.id) ? '取消收藏文件' : '收藏文件',
         onClick: () => handleToggleFileFavorite(file.id),
       },
-      action: {
-        label: '查看',
-        onClick: (event) => {
-          event.stopPropagation();
-          navigate(`/files/${file.id}`);
-        },
-      },
-      menu: canManageFiles ? (
-        <div className="relative">
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              setOpenMenuKey((prev) => (prev === `file-${file.id}` ? null : `file-${file.id}`));
-            }}
-            onMouseDown={(event) => event.stopPropagation()}
-            className="rounded-full p-2 text-slate-400 opacity-0 transition-colors hover:bg-slate-100 hover:text-slate-700 group-hover:opacity-100"
-          >
-            <MoreVertical className="h-4 w-4" />
-          </button>
-          {openMenuKey === `file-${file.id}` ? (
-            <div
-              onClick={(event) => event.stopPropagation()}
-              onMouseDown={(event) => event.stopPropagation()}
-              className={`absolute right-0 z-20 w-40 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_30px_rgba(188,199,220,0.25)] ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
-            >
-              <button
-                type="button"
-                onClick={() => openRenameDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
-              >
-                <PencilLine className="h-4 w-4 text-slate-500" />
-                重命名
-              </button>
-              <button
-                type="button"
-                onClick={() => openDeleteDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4" />
-                删除
-              </button>
-            </div>
-          ) : null}
-        </div>
+      menu: file.capabilities?.can_rename || file.capabilities?.can_delete ? (
+        <InlineItemMenu
+          isOpen={openMenuKey === `file-${file.id}`}
+          canRename={!!file.capabilities?.can_rename}
+          canDelete={!!file.capabilities?.can_delete}
+          onToggle={() => setOpenMenuKey((prev) => (prev === `file-${file.id}` ? null : `file-${file.id}`))}
+          onRename={() => openRenameDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
+          onDelete={() => openDeleteDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
+        />
       ) : null,
     };
   });
@@ -618,20 +719,34 @@ const FolderDetail = () => {
 
   if (!folder) return <div className="p-8 text-center text-slate-500">加载中...</div>;
 
-  // 判断是否是二级文件夹（有 parent_id）
-  const isSecondLevel = folder.parent_id !== null;
-
   return (
-    <div className="relative flex h-full min-h-0 flex-col gap-6">
-      <div className="shrink-0 flex items-center justify-between">
-        <div className="flex items-center space-x-4">
+    <div
+      className="relative flex min-h-full flex-col gap-3 md:h-full md:min-h-0 md:gap-6"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={(event) => void handleDrop(event)}
+    >
+      {isDragActive ? (
+        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-3xl border-2 border-dashed border-[#45cdbc] bg-[#effcf9]/95">
+          <div className="flex flex-col items-center text-center text-[#168f83]">
+            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-white shadow-sm">
+              <UploadCloud className="h-7 w-7" />
+            </div>
+            <div className="text-base font-semibold">松开后加入上传队列</div>
+            <div className="mt-1 text-sm text-[#4b9e95]">支持文件、文件夹和多级嵌套目录</div>
+          </div>
+        </div>
+      ) : null}
+      <div className="flex shrink-0 flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-center gap-2 md:space-x-2">
           <button 
             onClick={() => navigate(-1)}
             className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-500"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">{folder.name}</h1>
+          <h1 className="min-w-0 flex-1 truncate text-xl font-bold tracking-tight text-slate-900 md:text-2xl">{folder.name}</h1>
           <FavoriteButton
             active={favoriteFolderIds.has(folder.id)}
             title={favoriteFolderIds.has(folder.id) ? '取消收藏当前文件夹' : '收藏当前文件夹'}
@@ -640,8 +755,16 @@ const FolderDetail = () => {
           />
         </div>
         
-        <div className="flex items-center space-x-3">
-          {canManageFiles && (
+        <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:flex-nowrap md:space-x-1">
+          <button
+            type="button"
+            onClick={() => navigate(`/search?folderId=${folder.id}`)}
+            className="inline-flex h-10 items-center rounded-xl border border-[#bfeae5] bg-[#edfbf9] px-3 text-sm font-semibold text-[#168f91] transition hover:bg-[#dcf7f4] md:px-4"
+          >
+            <Sparkles className="mr-2 h-4 w-4" />
+            当前目录 AI
+          </button>
+          {canUploadToCurrentFolder && (
             <>
               <input 
                 type="file" 
@@ -658,26 +781,73 @@ const FolderDetail = () => {
                 multiple
                 className="hidden" 
               />
-              {folder.can_manage_settings ? (
-                <button
-                  type="button"
-                  onClick={() => navigate(`/folders/${folder.id}/settings`)}
-                  className="flex items-center rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-all hover:bg-slate-200"
-                >
-                  <Settings2 className="mr-2 h-4 w-4" />
-                  编辑配置
-                </button>
+              {canManageCurrentFolder ? (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setShowFolderActions((prev) => !prev);
+                    }}
+                    className="flex items-center rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-all hover:bg-slate-200"
+                  >
+                    <MoreVertical className="mr-2 h-4 w-4" />
+                    文件夹管理
+                  </button>
+                  {showFolderActions ? (
+                    <div
+                      className="absolute right-0 top-12 z-20 w-44 rounded-xl border border-slate-200 bg-white p-2 shadow-lg"
+                      onMouseDown={(event) => event.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowFolderActions(false);
+                          navigate(`/folders/${folder.id}/settings`);
+                        }}
+                        className="flex w-full items-center rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100"
+                      >
+                        <Settings2 className="mr-2 h-4 w-4" />
+                        修改设置
+                      </button>
+                      {canRenameCurrentFolder ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowFolderActions(false);
+                            openRenameDialog({ kind: 'folder', id: folder.id, name: folder.name });
+                          }}
+                          className="flex w-full items-center rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100"
+                        >
+                          <PencilLine className="mr-2 h-4 w-4" />
+                          重命名
+                        </button>
+                      ) : null}
+                      {canDeleteCurrentFolder ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowFolderActions(false);
+                            openDeleteDialog({ kind: 'folder', id: folder.id, name: folder.name });
+                          }}
+                          className="flex w-full items-center rounded-lg px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50"
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          删除文件夹
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
-              {!isSecondLevel && (
-                <button 
-                  onClick={() => folderInputRef.current?.click()}
-                  disabled={isUploading || isSummaryRunning}
-                  className="flex items-center bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
-                >
-                  <Folder className="w-4 h-4 mr-2" />
-                  上传文件夹
-                </button>
-              )}
+              <button
+                onClick={() => folderInputRef.current?.click()}
+                disabled={isUploading || isSummaryRunning}
+                className="flex items-center bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-medium transition-all disabled:opacity-50"
+              >
+                <Folder className="w-4 h-4 mr-2" />
+                上传文件夹
+              </button>
               <button 
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isUploading || isSummaryRunning}
@@ -688,25 +858,80 @@ const FolderDetail = () => {
               </button>
             </>
           )}
-          {!canManageFiles && folder.can_manage_settings ? (
-            <button
-              type="button"
-              onClick={() => navigate(`/folders/${folder.id}/settings`)}
-              className="flex items-center rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-all hover:bg-slate-200"
-            >
-              <Settings2 className="mr-2 h-4 w-4" />
-              编辑配置
-            </button>
+          {!canUploadToCurrentFolder && canManageCurrentFolder ? (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setShowFolderActions((prev) => !prev);
+                }}
+                className="flex items-center rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-all hover:bg-slate-200"
+              >
+                <MoreVertical className="mr-2 h-4 w-4" />
+                文件夹管理
+              </button>
+              {showFolderActions ? (
+                <div
+                  className="absolute right-0 top-12 z-20 w-44 rounded-xl border border-slate-200 bg-white p-2 shadow-lg"
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowFolderActions(false);
+                      navigate(`/folders/${folder.id}/settings`);
+                    }}
+                    className="flex w-full items-center rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100"
+                  >
+                    <Settings2 className="mr-2 h-4 w-4" />
+                    修改设置
+                  </button>
+                  {canRenameCurrentFolder ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowFolderActions(false);
+                        openRenameDialog({ kind: 'folder', id: folder.id, name: folder.name });
+                      }}
+                      className="flex w-full items-center rounded-lg px-3 py-2 text-sm text-slate-700 transition-colors hover:bg-slate-100"
+                    >
+                      <PencilLine className="mr-2 h-4 w-4" />
+                      重命名
+                    </button>
+                  ) : null}
+                  {canDeleteCurrentFolder ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowFolderActions(false);
+                        openDeleteDialog({ kind: 'folder', id: folder.id, name: folder.name });
+                      }}
+                      className="flex w-full items-center rounded-lg px-3 py-2 text-sm text-red-600 transition-colors hover:bg-red-50"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      删除文件夹
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
 
+      {uploadError ? (
+        <div className="shrink-0 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600">
+          {uploadError}
+        </div>
+      ) : null}
+
       {/* Upload Panel */}
       {showUploadPanel && uploadQueue.length > 0 && (
         <div className="shrink-0 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-lg">
-          <div className="p-4 border-b border-slate-100 bg-slate-50/50">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-4 text-sm">
+          <div className="border-b border-slate-100 bg-slate-50/50 p-3 md:p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                 {pendingCount > 0 && (
                   <span className="text-slate-600">待上传: <strong>{pendingCount}</strong></span>
                 )}
@@ -741,7 +966,7 @@ const FolderDetail = () => {
                   </span>
                 )}
               </div>
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {failedCount > 0 && !isSummaryRunning && (
                   <button
                     onClick={retryFailed}
@@ -765,6 +990,8 @@ const FolderDetail = () => {
                         window.clearTimeout(summaryPollTimerRef.current);
                       }
                       setUploadQueue([]);
+                      setPendingDirectoryPaths([]);
+                      setUploadError(null);
                       setSummaryTask(null);
                       setShowUploadPanel(false);
                       if (successCount > 0) fetchFolderData();
@@ -852,18 +1079,18 @@ const FolderDetail = () => {
         </div>
       )}
 
-      <div className="min-h-0 flex flex-1 flex-col bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
+      <div className="flex min-h-[520px] flex-1 flex-col overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm md:min-h-0">
         {(subfolders.length === 0 && files.length === 0) ? (
-          <div className="flex flex-1 flex-col items-center justify-center p-16 text-center">
+          <div className="flex flex-1 flex-col items-center justify-center p-8 text-center md:p-16">
             <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4">
               <File className="w-8 h-8 text-slate-300" />
             </div>
             <p className="text-slate-500 font-medium mb-2">此文件夹为空</p>
-            {canManageFiles && (
+            {canUploadToCurrentFolder && (
               <>
                 <p className="text-sm text-slate-400 mb-6">点击下方按钮添加内容</p>
-                <div className="flex items-center justify-center space-x-3">
-                  {folder.can_manage_settings ? (
+                <div className="flex flex-wrap items-center justify-center gap-2 md:space-x-1">
+                  {canManageCurrentFolder ? (
                     <button
                       type="button"
                       onClick={() => navigate(`/folders/${folder.id}/settings`)}
@@ -873,16 +1100,14 @@ const FolderDetail = () => {
                       编辑配置
                     </button>
                   ) : null}
-                  {!isSecondLevel && (
-                    <button 
-                      onClick={() => folderInputRef.current?.click()}
-                      disabled={isUploading || isSummaryRunning}
-                      className="flex items-center bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                    >
-                      <Folder className="w-4 h-4 mr-2" />
-                      上传文件夹
-                    </button>
-                  )}
+                  <button
+                    onClick={() => folderInputRef.current?.click()}
+                    disabled={isUploading || isSummaryRunning}
+                    className="flex items-center bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Folder className="w-4 h-4 mr-2" />
+                    上传文件夹
+                  </button>
                   <button 
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploading || isSummaryRunning}
@@ -894,7 +1119,7 @@ const FolderDetail = () => {
                 </div>
               </>
             )}
-            {!canManageFiles && <p className="text-sm text-slate-400">您没有权限添加内容</p>}
+            {!canUploadToCurrentFolder && <p className="text-sm text-slate-400">您没有权限添加内容</p>}
           </div>
         ) : (
           <LibraryItemsView
@@ -907,7 +1132,11 @@ const FolderDetail = () => {
               onClick: () => handleSort('name'),
               direction: sortConfig.key === 'name' ? sortConfig.direction : null,
             }}
-            secondaryColumn={false}
+            secondaryColumn={{
+              label: '类型',
+              onClick: () => handleSort('file_ext'),
+              direction: sortConfig.key === 'file_ext' ? sortConfig.direction : null,
+            }}
             sizeColumn={{
               label: '大小',
               onClick: () => handleSort('size'),
@@ -919,7 +1148,7 @@ const FolderDetail = () => {
               onClick: () => handleSort('created_at'),
               direction: sortConfig.key === 'created_at' ? sortConfig.direction : null,
             }}
-            gridClassName="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
+            gridClassName="grid gap-3 p-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,150px),1fr))] md:gap-4 md:p-4 md:[grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr))]"
           />
         )}
       </div>

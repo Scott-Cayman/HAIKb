@@ -11,7 +11,12 @@ type RelatedSearchFile = RelatedFileItem & {
   file_ext?: string | null;
   preview_status?: string | null;
   created_at?: string | null;
+  updated_at?: string | null;
   size?: number | null;
+  folder_name?: string | null;
+  folder_path?: string | null;
+  matched_fields?: string[];
+  match_excerpt?: string | null;
 };
 
 type RelatedFilesStripProps = {

@@ -86,15 +86,15 @@ const Favorites = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center">
             <Star className="w-5 h-5 text-amber-600 fill-amber-500" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">我的收藏</h1>
-            <p className="text-sm text-slate-500 mt-1">集中查看常用文件和文件夹，支持一键取消收藏。</p>
+            <h1 className="text-xl font-bold tracking-tight text-slate-900 md:text-2xl">我的收藏</h1>
+            <p className="mt-1 hidden text-sm text-slate-500 sm:block">集中查看常用文件和文件夹，支持一键取消收藏。</p>
           </div>
         </div>
         <div className="text-sm text-slate-400">{items.length} 项</div>
@@ -117,7 +117,7 @@ const Favorites = () => {
             dateColumn={{ label: '收藏时间' }}
           />
         ) : (
-          <div className="p-12 text-center">
+          <div className="p-8 text-center md:p-12">
             <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <Star className="w-8 h-8 text-slate-400" />
             </div>

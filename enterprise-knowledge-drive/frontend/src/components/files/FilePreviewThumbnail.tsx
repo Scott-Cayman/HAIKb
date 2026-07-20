@@ -1,166 +1,192 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { useEffect, useRef, useState } from 'react';
 
 import { API_BASE_URL } from '../../services/backendConfig';
 import FileIconBadge from './FileIconBadge';
+
+const THUMBNAIL_EXTENSIONS = new Set([
+  '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+  '.pdf', '.jpg', '.jpeg', '.png', '.webp', '.gif',
+  '.mp4', '.webm', '.ogg', '.mov',
+]);
+
+const inferExtension = (fileName?: string | null) => {
+  const normalized = (fileName || '').trim().toLowerCase();
+  const dotIndex = normalized.lastIndexOf('.');
+  return dotIndex >= 0 ? normalized.slice(dotIndex) : '';
+};
 
 type FilePreviewThumbnailProps = {
   fileId: number;
   fileName?: string | null;
   fileExt?: string | null;
   previewStatus?: string | null;
+  thumbnailStatus?: string | null;
   className?: string;
   imageClassName?: string;
   fallbackClassName?: string;
+  smartFit?: boolean;
 };
-
-const IMAGE_PREVIEW_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
-const PDF_PREVIEW_EXTENSIONS = new Set(['.pdf', '.ppt', '.pptx', '.xls', '.xlsx']);
-
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 const FilePreviewThumbnail = ({
   fileId,
   fileName,
   fileExt,
-  previewStatus,
+  thumbnailStatus,
   className,
   imageClassName,
   fallbackClassName,
+  smartFit = false,
 }: FilePreviewThumbnailProps) => {
-  const normalizedExt = (fileExt || '').toLowerCase();
-  const previewKind = useMemo<'image' | 'pdf' | null>(
-    () => {
-      if (previewStatus !== 'success') {
-        return null;
-      }
-      if (IMAGE_PREVIEW_EXTENSIONS.has(normalizedExt)) {
-        return 'image';
-      }
-      if (PDF_PREVIEW_EXTENSIONS.has(normalizedExt)) {
-        return 'pdf';
-      }
-      return null;
-    },
-    [normalizedExt, previewStatus],
-  );
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
-  const [containerWidth, setContainerWidth] = useState(240);
-
-  useEffect(() => {
-    setLoadFailed(false);
-    setPreviewUrl((currentUrl) => {
-      if (currentUrl) {
-        window.URL.revokeObjectURL(currentUrl);
-      }
-      return null;
-    });
-
-    if (!previewKind) {
-      return;
-    }
-
-    const controller = new AbortController();
-
-    // 首页缩略图直接拉取 blob，避免 img 标签无法携带鉴权头的问题。
-    const loadPreview = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/files/${fileId}/preview`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`preview request failed: ${response.status}`);
-        }
-
-        const blob = await response.blob();
-        const nextUrl = window.URL.createObjectURL(blob);
-        setPreviewUrl(nextUrl);
-      } catch (error) {
-        if (controller.signal.aborted) {
-          return;
-        }
-        console.error('Failed to load file preview thumbnail', error);
-        setLoadFailed(true);
-      }
-    };
-
-    loadPreview();
-
-    return () => {
-      controller.abort();
-    };
-  }, [fileId, previewKind]);
+  const [isTallPortrait, setIsTallPortrait] = useState(false);
+  const [runtimeStatus, setRuntimeStatus] = useState(thumbnailStatus || 'pending');
+  const normalizedExtension = (fileExt || inferExtension(fileName)).toLowerCase();
+  const supportsThumbnail = THUMBNAIL_EXTENSIONS.has(normalizedExtension);
 
   useEffect(() => {
     const node = containerRef.current;
-    if (!node || typeof ResizeObserver === 'undefined') {
+    if (!node) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true);
       return;
     }
 
-    const updateWidth = () => {
-      setContainerWidth(node.clientWidth || 240);
-    };
-
-    updateWidth();
-    const observer = new ResizeObserver(() => updateWidth());
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '160px' },
+    );
     observer.observe(node);
     return () => observer.disconnect();
-  }, []);
+  }, [fileId]);
 
   useEffect(() => {
-    return () => {
-      if (previewUrl) {
-        window.URL.revokeObjectURL(previewUrl);
+    setLoadFailed(false);
+    setIsTallPortrait(false);
+    setRuntimeStatus(supportsThumbnail ? (thumbnailStatus || 'pending') : 'unsupported');
+    setThumbnailUrl((currentUrl) => {
+      if (currentUrl) window.URL.revokeObjectURL(currentUrl);
+      return null;
+    });
+
+    if (!isVisible || !supportsThumbnail) return;
+
+    const controller = new AbortController();
+    let retryTimer: number | null = null;
+    let attempt = 0;
+
+    const loadThumbnail = async () => {
+      try {
+        attempt += 1;
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_BASE_URL}/files/${fileId}/thumbnail`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          signal: controller.signal,
+          cache: 'default',
+        });
+
+        if (response.status === 202) {
+          const payload = await response.json().catch(() => ({}));
+          if (controller.signal.aborted) return;
+          setRuntimeStatus(payload.thumbnail_status || 'processing');
+          const retryAfterValue = Number(payload.retry_after || response.headers.get('Retry-After') || 2);
+          const retryAfterSeconds = Number.isFinite(retryAfterValue) ? Math.max(1, retryAfterValue) : 2;
+          if (attempt < 180) {
+            retryTimer = window.setTimeout(loadThumbnail, Math.min(retryAfterSeconds, 5) * 1000);
+          }
+          return;
+        }
+
+        if (response.status === 415) {
+          setRuntimeStatus('unsupported');
+          return;
+        }
+
+        if (response.status === 422) {
+          setRuntimeStatus('failed');
+          setLoadFailed(true);
+          return;
+        }
+
+        if (!response.ok) throw new Error(`thumbnail request failed: ${response.status}`);
+
+        const blob = await response.blob();
+        if (controller.signal.aborted) return;
+        setRuntimeStatus('success');
+        setThumbnailUrl(window.URL.createObjectURL(blob));
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error('Failed to load file thumbnail', error);
+          if (attempt < 3) {
+            retryTimer = window.setTimeout(loadThumbnail, 1500 * attempt);
+          } else {
+            setLoadFailed(true);
+          }
+        }
       }
     };
-  }, [previewUrl]);
+    loadThumbnail();
+    return () => {
+      controller.abort();
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [fileId, isVisible, supportsThumbnail, thumbnailStatus]);
 
-  if (!previewKind || loadFailed) {
-    return (
-      <FileIconBadge
-        fileName={fileName}
-        className={className}
-        imageClassName={imageClassName}
-        fallbackClassName={fallbackClassName}
-      />
-    );
-  }
+  useEffect(
+    () => () => {
+      if (thumbnailUrl) window.URL.revokeObjectURL(thumbnailUrl);
+    },
+    [thumbnailUrl],
+  );
+
+  const isGenerating = runtimeStatus === 'pending' || runtimeStatus === 'processing';
+  const showImage = runtimeStatus === 'success' && thumbnailUrl && !loadFailed;
 
   return (
-    <div ref={containerRef} className={className}>
-      {!previewUrl ? (
-        <div className="h-full w-full animate-pulse bg-slate-100" />
-      ) : previewKind === 'image' ? (
+    <div ref={containerRef} className={`relative ${className || ''}`}>
+      {showImage ? (
         <img
-          src={previewUrl}
-          alt={fileName || 'file preview'}
-          className={imageClassName}
+          src={thumbnailUrl}
+          alt={fileName ? `${fileName} 封面` : '文件封面'}
+          className={`${imageClassName || ''} ${
+            smartFit
+              ? isTallPortrait
+                ? 'object-cover'
+                : 'object-contain p-2.5'
+              : ''
+          }`}
           loading="lazy"
+          onLoad={(event) => {
+            if (!smartFit) return;
+            const { naturalHeight, naturalWidth } = event.currentTarget;
+            setIsTallPortrait(naturalHeight / Math.max(naturalWidth, 1) > 1.6);
+          }}
           onError={() => setLoadFailed(true)}
         />
       ) : (
-        <Document
-          file={previewUrl}
-          loading={<div className="h-full w-full animate-pulse bg-slate-100" />}
-          error={<FileIconBadge fileName={fileName} className={className} imageClassName={imageClassName} fallbackClassName={fallbackClassName} />}
-          onLoadError={() => setLoadFailed(true)}
-          className="flex h-full w-full items-center justify-center overflow-hidden"
-        >
-          <Page
-            pageNumber={1}
-            width={Math.max(containerWidth, 120)}
-            renderAnnotationLayer={false}
-            renderTextLayer={false}
-            loading={<div className="h-full w-full animate-pulse bg-slate-100" />}
-            onLoadError={() => setLoadFailed(true)}
-          />
-        </Document>
+        <FileIconBadge
+          fileName={fileName}
+          className="flex h-full w-full items-center justify-center"
+          imageClassName={smartFit ? 'block h-11 w-11 object-contain' : imageClassName}
+          fallbackClassName={fallbackClassName}
+        />
       )}
+
+      {isGenerating ? (
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-900/55 to-transparent px-3 pb-2 pt-6 text-center text-[11px] font-medium text-white">
+          正在生成封面
+        </div>
+      ) : null}
+      {runtimeStatus === 'success' && !thumbnailUrl && !loadFailed ? (
+        <div className="pointer-events-none absolute inset-0 animate-pulse bg-slate-100/55 motion-reduce:animate-none" />
+      ) : null}
     </div>
   );
 };

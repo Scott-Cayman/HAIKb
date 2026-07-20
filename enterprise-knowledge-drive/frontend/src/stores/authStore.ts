@@ -5,6 +5,9 @@ export interface User {
   id: number;
   name: string;
   avatar?: string;
+  email?: string;
+  mobile?: string;
+  department_id?: string;
   is_admin: boolean;
   is_super_admin: boolean;
   department_name?: string;

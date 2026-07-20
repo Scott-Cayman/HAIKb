@@ -14,6 +14,7 @@ type AgentAnswerPanelProps = {
   relatedFiles?: RelatedSearchFile[];
   composer?: ReactNode;
   onExpand?: () => void;
+  streamStatus?: string | null;
 };
 
 const DebugSection = ({ title, content }: { title: string; content?: string | null }) => {
@@ -68,6 +69,41 @@ const extractInlineText = (children: ReactNode) => {
   return '';
 };
 
+const matchTypeLabels: Record<string, string> = {
+  exact: '标准问题精确命中',
+  alias: '扩展问法精确命中',
+  canonical_exact: '标准问题精确命中',
+  alias_exact: '扩展问法精确命中',
+  atomic_exact: '原子问题精确命中',
+  atomic_phrase: '原子语义短语命中',
+  atomic_lexical: '原子关键词命中',
+  atomic_semantic: '原子向量语义命中',
+  atomic_semantic_verified: '原子向量语义命中',
+  atomic_semantic_candidate: '原子语义候选',
+  semantic: '原子向量语义命中',
+  semantic_candidate: '语义候选',
+  none: '未命中预设',
+};
+
+const triggerTypeLabels: Record<string, string> = {
+  canonical: '标准问题',
+  canonical_fragment: '标准问题片段',
+  alias: '扩展问法',
+  alias_fragment: '扩展问法片段',
+  keyword: '关键词',
+  answer_fact: '答案事实',
+  fact: '答案事实',
+  derived_fact: '事实推导问法',
+};
+
+const verificationLabels: Record<string, string> = {
+  published_trigger: '已发布索引校验',
+  semantic_threshold_and_qualifier_guard: '语义阈值与限定词校验',
+  qualifier_guard: '限定词安全拦截',
+  reranker: '语义覆盖重排校验',
+  reranker_rejected: '语义覆盖不足',
+};
+
 const AgentAnswerPanel = ({
   answer,
   loading,
@@ -77,6 +113,7 @@ const AgentAnswerPanel = ({
   relatedFiles = [],
   composer,
   onExpand,
+  streamStatus,
 }: AgentAnswerPanelProps) => {
   const [detailOpen, setDetailOpen] = useState(false);
   const navigate = useNavigate();
@@ -84,6 +121,9 @@ const AgentAnswerPanel = ({
   const stats = (debugTrace?.stats || {}) as Record<string, any>;
   const prompts = (debugTrace?.prompts || {}) as Record<string, any>;
   const modelTrace = Array.isArray(debugTrace?.model_trace) ? debugTrace?.model_trace : [];
+  const scope = (debugTrace?.scope || {}) as Record<string, any>;
+  const presetMatch = (debugTrace?.preset_match || {}) as Record<string, any>;
+  const retrieval = (debugTrace?.retrieval || {}) as Record<string, any>;
   const linkedAnswer = useMemo(() => buildLinkedAnswer(answer || '', relatedFiles), [answer, relatedFiles]);
   const fileNameMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -96,9 +136,9 @@ const AgentAnswerPanel = ({
   }, [relatedFiles]);
 
   return (
-    <section className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[32px] border border-slate-200 bg-white">
+    <section className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-[22px] border border-slate-200 bg-white md:rounded-[32px]">
 
-      <div className="relative border-b border-white/70 px-5 py-4">
+      <div className="relative border-b border-white/70 px-3 py-3 md:px-5 md:py-4">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#eefaf7] text-[#33beae]">
@@ -106,7 +146,7 @@ const AgentAnswerPanel = ({
             </div>
             <div>
               <div className="text-sm font-semibold text-slate-800">Agent智能推荐</div>
-              <div className="text-xs text-slate-400">根据知识库内容生成答案与推荐文件</div>
+              <div className="hidden text-xs text-slate-400 sm:block">根据知识库内容生成答案与推荐文件</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -132,18 +172,18 @@ const AgentAnswerPanel = ({
         </div>
       </div>
 
-      <div className="custom-scrollbar search-panel-scrollbar relative min-h-0 flex-1 overflow-y-auto px-5 py-5">
-        {loading ? (
-          <div className="flex items-center gap-3 py-10 text-sm text-slate-500">
-            <Loader2 className="h-5 w-5 animate-spin" />
-            AI 正在整理推荐文件与回答内容...
-          </div>
-        ) : error ? (
+      <div className="custom-scrollbar search-panel-scrollbar relative min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-5 md:py-5">
+        {error ? (
           <div className="py-10 text-sm leading-7 text-red-500">
             {error}
           </div>
         ) : answer ? (
           <div className="flex min-h-full flex-col">
+            {streamStatus ? (
+              <div className="mb-4 flex items-center gap-2 rounded-2xl border border-[#c9eeea] bg-[#f0fbfa] px-3.5 py-2.5 text-xs text-[#208e8d]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />{streamStatus}
+              </div>
+            ) : null}
             <article className="prose prose-slate max-w-none text-sm leading-7 prose-p:my-3 prose-ul:my-3 prose-ol:my-3">
               <ReactMarkdown
                 components={{
@@ -223,23 +263,63 @@ const AgentAnswerPanel = ({
               <div className="mt-6 space-y-3 border-t border-slate-100 pt-4">
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                    <div className="mb-2 text-xs font-semibold text-slate-600">会话信息</div>
+                    <div className="mb-2 text-xs font-semibold text-slate-600">回答来源</div>
                     <div className="space-y-1 text-[11px] leading-6 text-slate-600">
                       <div>会话 ID：{conversationId || '-'}</div>
-                      <div>路由模式：{routing.route_mode || '-'}</div>
-                      <div>意图类型：{routing.intent_type || '-'}</div>
-                      <div>路由来源：{routing.route_source || 'rules'}</div>
+                      <div>处理方式：{presetMatch.matched ? '文件夹预设优先' : '知识库向量检索'}</div>
+                      <div>检索范围：{scope.mode === 'current_folder_subtree' ? '当前目录及子目录' : '账号全部可见目录'}</div>
+                      <div>权限来源：{routing.route_source === 'folder_permissions' ? '实时文件权限' : routing.route_source || '-'}</div>
                     </div>
                   </div>
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                     <div className="mb-2 text-xs font-semibold text-slate-600">命中统计</div>
                     <div className="space-y-1 text-[11px] leading-6 text-slate-600">
-                      <div>命中知识库：{(routing.target_library_names || []).join('、') || '-'}</div>
-                      <div>范围文件数：{stats.scoped_file_count ?? routing.scoped_file_count ?? 0}</div>
+                      <div>预设候选数：{presetMatch.candidate_count ?? 0}</div>
+                      <div>范围文件数：{stats.scoped_file_count ?? stats.visible_file_count ?? 0}</div>
                       <div>命中证据数：{stats.evidence_count ?? 0}</div>
                       <div>推荐文件数：{stats.related_file_count ?? 0}</div>
                     </div>
                   </div>
+                </div>
+
+                <div className={`rounded-2xl border p-3 ${presetMatch.matched ? 'border-[#bce9e3] bg-[#effbf9]' : 'border-slate-200 bg-slate-50'}`}>
+                  <div className="mb-2 text-xs font-semibold text-slate-600">预设问题匹配</div>
+                  <div className="grid gap-x-4 gap-y-1 text-[11px] leading-6 text-slate-600 md:grid-cols-2">
+                    <div>结果：{presetMatch.matched ? '已命中并优先回答' : '未高置信命中'}</div>
+                    <div>方式：{matchTypeLabels[presetMatch.match_type] || presetMatch.match_type || '未命中预设'}</div>
+                    <div>绑定目录：{presetMatch.folder_name || '-'}</div>
+                    <div>相似度：{typeof presetMatch.score === 'number' ? presetMatch.score.toFixed(4) : '-'}</div>
+                    <div>标准问题：{presetMatch.question || '-'}</div>
+                    <div>继承命中：{presetMatch.inherited ? '是' : '否'}</div>
+                    <div>触发类型：{triggerTypeLabels[presetMatch.trigger_type] || presetMatch.trigger_type || '-'}</div>
+                    <div>置信分差：{typeof presetMatch.margin === 'number' ? presetMatch.margin.toFixed(4) : '-'}</div>
+                    <div className="md:col-span-2">命中问法：{presetMatch.trigger_text || '-'}</div>
+                    <div>安全校验：{verificationLabels[presetMatch.verification_method] || presetMatch.verification_method || '-'}</div>
+                    <div>校验耗时：{presetMatch.verification_ms != null ? `${presetMatch.verification_ms} ms` : '-'}</div>
+                  </div>
+                  {presetMatch.evidence_text ? (
+                    <div className="mt-3 rounded-xl border border-[#d6efeb] bg-white/80 px-3 py-2.5">
+                      <div className="mb-1 text-[10px] font-semibold text-[#278f88]">本次回答证据</div>
+                      <div className="whitespace-pre-wrap break-words text-[11px] leading-5 text-slate-600">{presetMatch.evidence_text}</div>
+                    </div>
+                  ) : null}
+                  {Array.isArray(presetMatch.unsupported_qualifiers) && presetMatch.unsupported_qualifiers.length > 0 ? (
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800">
+                      已安全降级到文件检索，预设答案未覆盖：{presetMatch.unsupported_qualifiers.join('、')}
+                    </div>
+                  ) : null}
+                  <div className="mt-2 text-[11px] leading-5 text-slate-500">{presetMatch.reason || '未提供匹配说明'}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="mb-2 text-xs font-semibold text-slate-600">后置文件检索</div>
+                  <div className="grid gap-x-4 gap-y-1 text-[11px] leading-6 text-slate-600 md:grid-cols-2">
+                    <div>是否执行：{retrieval.ran ? '是' : '否'}</div>
+                    <div>范围模式：{retrieval.mode || '-'}</div>
+                    <div>耗时：{retrieval.elapsed_ms != null ? `${retrieval.elapsed_ms} ms` : '-'}</div>
+                    <div>重排：{retrieval.rerank?.used ? 'LLM 重排' : '向量顺序'}</div>
+                  </div>
+                  <div className="mt-2 text-[11px] leading-5 text-slate-500">{retrieval.summary || '等待检索结果'}</div>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -260,7 +340,6 @@ const AgentAnswerPanel = ({
                   </div>
                 </div>
 
-                <DebugSection title="AI 选库提示词" content={prompts?.routing?.system ? `System:\n${prompts.routing.system}\n\nUser:\n${prompts.routing.user}` : null} />
                 <DebugSection title="文件重排提示词" content={prompts?.rerank?.system ? `System:\n${prompts.rerank.system}\n\nUser:\n${prompts.rerank.user}` : null} />
                 <DebugSection title="最终回答提示词" content={prompts?.answer?.system ? `System:\n${prompts.answer.system}\n\nUser:\n${prompts.answer.user}` : null} />
               </div>
@@ -279,6 +358,11 @@ const AgentAnswerPanel = ({
                 重新回答
               </button>
             </div>
+          </div>
+        ) : loading ? (
+          <div className="flex items-center gap-3 py-10 text-sm text-slate-500">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            {streamStatus || 'AI 正在确认目录权限与预设问题...'}
           </div>
         ) : (
           <div className="py-10 text-sm text-slate-500">

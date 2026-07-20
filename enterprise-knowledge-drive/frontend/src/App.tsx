@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import BackendReadyCheck from './components/BackendReadyCheck';
 
@@ -46,6 +46,11 @@ const ProtectedRoute = ({ children, requireAdmin = false }: { children: React.Re
   return <>{children}</>;
 };
 
+const LegacyAdminRedirect = ({ to }: { to: string }) => {
+  const location = useLocation();
+  return <Navigate to={`${to}${location.search}`} replace />;
+};
+
 const App = () => {
   const checkAuth = useAuthStore((state) => state.checkAuth);
 
@@ -86,8 +91,10 @@ const App = () => {
             <Route path="folders" element={<FoldersManage />} />
             <Route path="usage-stats" element={<UsageStats />} />
             <Route path="users" element={<UsersManage />} />
-            <Route path="settings" element={<Settings />} />
-            <Route path="settings/preset-prompts" element={<PresetQuestions />} />
+            <Route path="appearance" element={<Settings />} />
+            <Route path="preset-prompts" element={<PresetQuestions />} />
+            <Route path="settings" element={<LegacyAdminRedirect to="/admin/appearance" />} />
+            <Route path="settings/preset-prompts" element={<LegacyAdminRedirect to="/admin/preset-prompts" />} />
             <Route path="rag" element={<RagManage />} />
           </Route>
         </Routes>

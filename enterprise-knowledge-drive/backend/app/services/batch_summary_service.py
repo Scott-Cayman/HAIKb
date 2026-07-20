@@ -21,6 +21,7 @@ class BatchSummaryTask:
     """内存中的批量总结任务状态。"""
 
     task_id: str
+    owner_user_id: int
     file_ids: List[int]
     created_at: float
     deadline_at: float
@@ -44,7 +45,7 @@ class BatchSummaryService:
         self._active_file_task_map: Dict[int, str] = {}
         self._lock = threading.Lock()
 
-    def create_task(self, file_ids: List[int]) -> dict:
+    def create_task(self, file_ids: List[int], owner_user_id: int) -> dict:
         normalized_ids = self._normalize_file_ids(file_ids)
         if not normalized_ids:
             raise ValueError("没有可生成总结的文件")
@@ -57,7 +58,7 @@ class BatchSummaryService:
             }
             if len(normalized_ids) == 1 and len(existing_task_ids) == 1:
                 existing_task = self._tasks.get(next(iter(existing_task_ids)))
-                if existing_task:
+                if existing_task and existing_task.owner_user_id == owner_user_id:
                     return self._serialize_task(existing_task)
             normalized_ids = [file_id for file_id in normalized_ids if file_id not in self._active_file_task_map]
 
@@ -68,6 +69,7 @@ class BatchSummaryService:
         now = time.time()
         task = BatchSummaryTask(
             task_id=task_id,
+            owner_user_id=owner_user_id,
             file_ids=normalized_ids,
             pending_file_ids=list(normalized_ids),
             created_at=now,
@@ -80,12 +82,19 @@ class BatchSummaryService:
 
         worker = threading.Thread(target=self._run_task, args=(task_id,), daemon=True)
         worker.start()
-        return self.get_task_status(task_id)
+        return self.get_task_status(task_id, owner_user_id=owner_user_id)
 
-    def get_task_status(self, task_id: str) -> dict:
+    def get_task_status(
+        self,
+        task_id: str,
+        owner_user_id: Optional[int] = None,
+        is_super_admin: bool = False,
+    ) -> dict:
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
+                raise ValueError("批量总结任务不存在")
+            if not is_super_admin and task.owner_user_id != owner_user_id:
                 raise ValueError("批量总结任务不存在")
             snapshot = self._serialize_task(task)
         return snapshot

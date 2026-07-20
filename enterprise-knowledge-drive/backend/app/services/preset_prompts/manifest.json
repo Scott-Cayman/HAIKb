@@ -16,5 +16,14 @@
     "relative_path": "departments/cross_marketing_center_preset_questions.md",
     "description": "跨界营销中心专属的运营指南与常见问题。",
     "sort_order": 20
+  },
+  {
+    "id": "agent-system",
+    "name": "全局 Agent 设定",
+    "scope_type": "system",
+    "department_name": null,
+    "relative_path": "global/agent_system_prompt.md",
+    "description": "控制 HAIKb 最终回答模型的身份、边界与输出规则。",
+    "sort_order": 0
   }
 ]

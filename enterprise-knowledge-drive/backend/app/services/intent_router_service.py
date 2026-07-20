@@ -13,28 +13,12 @@ from app.models.user import User
 from app.services.folder_access import can_view_folder
 from app.services.llm_service import llm_service
 
-LIBRARY_PRESETS = [
-    {
-        "intent_type": "proposal_library",
-        "display_name": "方案库",
-        "aliases": ["方案", "方案库", "投标", "标书", "案例", "提案", "项目方案", "投标方案"],
-    },
-    {
-        "intent_type": "design_library",
-        "display_name": "设计员文件库",
-        "aliases": ["设计", "设计员", "创意", "视觉", "海报", "排版", "创意文件", "设计资料"],
-    },
-    {
-        "intent_type": "onboarding_library",
-        "display_name": "新人知识库",
-        "aliases": ["新人", "入职", "培训", "上手", "适应", "手册", "新人知识库", "入门"],
-    },
-    {
-        "intent_type": "operations_library",
-        "display_name": "运营知识库",
-        "aliases": ["报销", "考勤", "行政", "财务", "流程", "制度", "运营", "审批"],
-    },
-]
+# Legacy keyword-to-library rules are deliberately disabled. They used to label
+# questions such as reimbursement as an "operations library intent" before any
+# permission or content match had happened, which produced misleading hit
+# details and could hide relevant files. Folder presets and real file
+# permissions are now the only authoritative fast-path and scope inputs.
+LIBRARY_PRESETS: List[dict] = []
 
 NAVIGATION_PHRASES = [
     "找什么",
@@ -118,7 +102,10 @@ class IntentRouterService:
                 "target_folder_ids": target_folder_ids,
                 "target_file_ids": target_file_ids,
                 "scoped_file_count": len(target_file_ids),
-                "should_short_circuit": route_mode == "preset_navigation" and self._should_short_circuit(query),
+                # Routing may explain or prioritize a library, but content
+                # questions must always reach retrieval so related files are
+                # returned. Permission scope is enforced separately.
+                "should_short_circuit": False,
                 "preset_answer": preset_answer,
                 "route_reason": self._build_route_reason(selected_folders, preset, route_source, llm_route_debug),
                 "route_source": route_source,
@@ -150,12 +137,24 @@ class IntentRouterService:
         }
 
     def _list_accessible_root_folders(self, db: Session, user: User) -> List[Folder]:
-        folders = (
+        roots = (
             db.query(Folder)
             .filter(Folder.parent_id == None, Folder.is_deleted == False)
             .order_by(Folder.sort_order.asc(), Folder.id.asc())
             .all()
         )
+        # The knowledge drive has one canonical root. Intent routing should
+        # classify among its first-level libraries/centres, not treat the root
+        # itself as the only candidate library.
+        if len(roots) == 1:
+            folders = (
+                db.query(Folder)
+                .filter(Folder.parent_id == roots[0].id, Folder.is_deleted == False)
+                .order_by(Folder.sort_order.asc(), Folder.id.asc())
+                .all()
+            )
+        else:
+            folders = roots
         return [folder for folder in folders if can_view_folder(db, folder, user)]
 
     def _load_folder_summaries(self, db: Session, folders: List[Folder]) -> Dict[int, FolderSummary]:

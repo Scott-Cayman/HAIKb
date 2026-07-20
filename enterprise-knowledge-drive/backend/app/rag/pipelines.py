@@ -128,6 +128,7 @@ class SummaryIndexingPipeline:
             db.commit()
 
             chunks = split_markdown_summary(summary.summary_markdown)
+            vector_records = []
             for idx, text in enumerate(chunks):
                 chunk_id = str(uuid.uuid4())
                 metadata = {
@@ -163,7 +164,27 @@ class SummaryIndexingPipeline:
                         relation_type="document",
                     )
                 )
-                vector_id = self.vector_store.add_text(chunk_id, text, metadata)
+                vector_records.append({"id": chunk_id, "text": text, "metadata": metadata})
+
+            # pgvector rows reference summary_chunks. Commit the relational
+            # records first, then generate all vectors in a single remote call
+            # and database transaction.
+            db.commit()
+            try:
+                if hasattr(self.vector_store, "add_texts"):
+                    vector_ids = self.vector_store.add_texts(vector_records)
+                else:
+                    vector_ids = [
+                        self.vector_store.add_text(record["id"], record["text"], record["metadata"])
+                        for record in vector_records
+                    ]
+            except Exception as exc:
+                summary.index_status = "failed"
+                summary.index_error = str(exc)[:2000]
+                db.commit()
+                raise
+
+            for vector_id in vector_ids:
                 db.add(
                     RagIndexRelation(
                         index_id=self.index_id,

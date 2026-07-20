@@ -1,511 +1,445 @@
-import { useEffect, useMemo, useState } from 'react';
-import { FileText, Loader2, Play, Plus, Save, Square } from 'lucide-react';
-
-import SystemSettingsTabs from '../../components/admin/SystemSettingsTabs';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
-  presetPromptsApi,
-  type CreatePresetPromptPayload,
-  type PresetPromptDetail,
-  type PresetPromptItem,
-} from '../../services/presetPrompts';
+  Bot,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleHelp,
+  FileText,
+  Folder,
+  Loader2,
+  Plus,
+  Save,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Zap,
+} from 'lucide-react';
+
+import api from '../../services/api';
 import {
-  clearTestDepartmentScope,
-  getTestDepartmentScope,
-  setTestDepartmentScope,
-  subscribeTestDepartmentScope,
-} from '../../services/testDepartmentScope';
-import { useAuthStore } from '../../stores/authStore';
+  folderAiPresetsApi,
+  type FolderAiPreset,
+  type FolderAiPresetQuestion,
+} from '../../services/folderAiPresets';
+import { presetPromptsApi, type PresetPromptDetail } from '../../services/presetPrompts';
 
-const formatUpdatedAt = (value?: string | null) => {
-  if (!value) {
-    return '未保存';
-  }
-  return new Date(value).toLocaleString();
-};
+type FolderItem = { id: number; name: string; parent_id: number | null };
 
-const getManagedDepartmentName = (departmentName?: string | null, rootDepartmentName?: string | null) => {
-  return rootDepartmentName || departmentName || '';
-};
+const emptyQuestion = (): FolderAiPresetQuestion => ({
+  question: '',
+  aliases: [],
+  answer: '',
+  keywords: [],
+  priority: 80,
+  is_enabled: true,
+});
 
 const PresetQuestions = () => {
-  const currentUser = useAuthStore((state) => state.user);
-  const isSuperAdmin = !!currentUser?.is_super_admin;
-  const managedDepartmentName = useMemo(
-    () => getManagedDepartmentName(currentUser?.department_name, currentUser?.root_department_name),
-    [currentUser?.department_name, currentUser?.root_department_name],
-  );
-
-  const [items, setItems] = useState<PresetPromptItem[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<PresetPromptDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedFolderId = Number(searchParams.get('folderId') || 0) || null;
+  const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(requestedFolderId);
+  const [folderQuery, setFolderQuery] = useState('');
+  const [activePreset, setActivePreset] = useState<FolderAiPreset | null>(null);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [sourceContent, setSourceContent] = useState('');
+  const [inheritToChildren, setInheritToChildren] = useState(true);
+  const [questions, setQuestions] = useState<FolderAiPresetQuestion[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [loadingTree, setLoadingTree] = useState(true);
+  const [loadingPreset, setLoadingPreset] = useState(false);
+  const [organizing, setOrganizing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [isCreateMode, setIsCreateMode] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [testDepartmentScope, setCurrentTestDepartmentScope] = useState<string | null>(getTestDepartmentScope());
-
-  const [editForm, setEditForm] = useState({
-    name: '',
-    description: '',
-    content: '',
-  });
-
-  const [createForm, setCreateForm] = useState<CreatePresetPromptPayload>({
-    name: '',
-    scope_type: isSuperAdmin ? 'global' : 'department',
-    department_name: managedDepartmentName,
-    description: '',
-    content: '',
-  });
-
-  const loadItems = async (targetId?: string | null) => {
-    const data = await presetPromptsApi.list();
-    setItems(data);
-
-    const nextId = targetId ?? selectedId ?? data[0]?.id ?? null;
-    setSelectedId(nextId);
-
-    if (nextId) {
-      return nextId;
-    }
-
-    setDetail(null);
-    setEditForm({ name: '', description: '', content: '' });
-    return null;
-  };
-
-  const loadDetail = async (presetId: string) => {
-    setDetailLoading(true);
-    setError(null);
-    try {
-      const data = await presetPromptsApi.get(presetId);
-      setDetail(data);
-      setEditForm({
-        name: data.name,
-        description: data.description || '',
-        content: data.content,
-      });
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || '加载预设问题失败');
-    } finally {
-      setDetailLoading(false);
-    }
-  };
+  const [agentPrompt, setAgentPrompt] = useState<PresetPromptDetail | null>(null);
+  const [agentPromptContent, setAgentPromptContent] = useState('');
+  const [agentPromptOpen, setAgentPromptOpen] = useState(true);
+  const [agentPromptLoading, setAgentPromptLoading] = useState(true);
+  const [agentPromptSaving, setAgentPromptSaving] = useState(false);
+  const [agentPromptNotice, setAgentPromptNotice] = useState<string | null>(null);
+  const [agentPromptError, setAgentPromptError] = useState<string | null>(null);
 
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setError(null);
+    const loadAgentPrompt = async () => {
+      setAgentPromptLoading(true);
+      setAgentPromptError(null);
       try {
-        const initialId = await loadItems();
-        if (initialId) {
-          await loadDetail(initialId);
-        }
+        const data = await presetPromptsApi.get('agent-system');
+        setAgentPrompt(data);
+        setAgentPromptContent(data.content || '');
       } catch (err: any) {
-        setError(err?.response?.data?.detail || '加载预设问题失败');
+        setAgentPromptError(err?.response?.data?.detail || '全局 Agent 设定加载失败');
       } finally {
-        setLoading(false);
+        setAgentPromptLoading(false);
       }
     };
-
-    load();
+    void loadAgentPrompt();
   }, []);
 
   useEffect(() => {
-    setCreateForm((prev) => ({
-      ...prev,
-      scope_type: isSuperAdmin ? prev.scope_type : 'department',
-      department_name: isSuperAdmin ? prev.department_name : managedDepartmentName,
-    }));
-  }, [isSuperAdmin, managedDepartmentName]);
-
-  useEffect(() => {
-    return subscribeTestDepartmentScope(setCurrentTestDepartmentScope);
+    const loadTree = async () => {
+      setLoadingTree(true);
+      try {
+        const collected: FolderItem[] = [];
+        let parents: Array<number | null> = [null];
+        while (parents.length) {
+          const batches = await Promise.all(
+            parents.map((parentId) => api.get<FolderItem[]>('/folders', { params: parentId == null ? {} : { parent_id: parentId } })),
+          );
+          const level = batches.flatMap((response) => response.data || []);
+          collected.push(...level);
+          parents = level.map((folder) => folder.id);
+        }
+        setFolders(collected);
+        const roots = collected.filter((folder) => folder.parent_id == null);
+        setExpanded(new Set(roots.map((folder) => folder.id)));
+        const initialId = requestedFolderId && collected.some((folder) => folder.id === requestedFolderId)
+          ? requestedFolderId
+          : roots[0]?.id ?? null;
+        setSelectedFolderId(initialId);
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || '目录树加载失败');
+      } finally {
+        setLoadingTree(false);
+      }
+    };
+    void loadTree();
   }, []);
 
-  const handleSelect = async (presetId: string) => {
-    setIsCreateMode(false);
-    setSelectedId(presetId);
-    await loadDetail(presetId);
+  useEffect(() => {
+    if (!selectedFolderId) return;
+    setSearchParams({ folderId: String(selectedFolderId) }, { replace: true });
+    const loadPreset = async () => {
+      setLoadingPreset(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const data = await folderAiPresetsApi.list(selectedFolderId);
+        const preset = data.presets[0] || null;
+        setActivePreset(preset);
+        setName(preset?.name || `${data.folder.name}预设问答`);
+        setDescription(preset?.description || '该目录的常见问题与标准答案');
+        setSourceContent(preset?.source_content || '');
+        setInheritToChildren(preset?.inherit_to_children ?? true);
+        setQuestions(preset?.questions || []);
+        setWarnings([]);
+      } catch (err: any) {
+        setActivePreset(null);
+        setQuestions([]);
+        setError(err?.response?.data?.detail || '没有权限配置该目录');
+      } finally {
+        setLoadingPreset(false);
+      }
+    };
+    void loadPreset();
+  }, [selectedFolderId, setSearchParams]);
+
+  const children = useMemo(() => {
+    const map = new Map<number | null, FolderItem[]>();
+    folders.forEach((folder) => map.set(folder.parent_id, [...(map.get(folder.parent_id) || []), folder]));
+    return map;
+  }, [folders]);
+
+  const visibleFolderIds = useMemo(() => {
+    const needle = folderQuery.trim().toLocaleLowerCase('zh-CN');
+    if (!needle) return null;
+    const ids = new Set<number>();
+    const byId = new Map(folders.map((folder) => [folder.id, folder]));
+    folders.filter((folder) => folder.name.toLocaleLowerCase('zh-CN').includes(needle)).forEach((folder) => {
+      let current: FolderItem | undefined = folder;
+      while (current) {
+        ids.add(current.id);
+        current = current.parent_id == null ? undefined : byId.get(current.parent_id);
+      }
+    });
+    return ids;
+  }, [folderQuery, folders]);
+
+  const selectedFolder = folders.find((folder) => folder.id === selectedFolderId) || null;
+
+  const renderFolder = (folder: FolderItem, depth: number): ReactNode => {
+    if (visibleFolderIds && !visibleFolderIds.has(folder.id)) return null;
+    const childFolders = children.get(folder.id) || [];
+    const open = expanded.has(folder.id) || Boolean(folderQuery);
+    const active = selectedFolderId === folder.id;
+    return (
+      <div key={folder.id}>
+        <button
+          type="button"
+          onClick={() => setSelectedFolderId(folder.id)}
+          className={`flex w-full items-center gap-2 rounded-xl py-2 pr-2 text-left text-sm transition ${
+            active ? 'bg-[#dff8f5] font-semibold text-[#168f91]' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          }`}
+          style={{ paddingLeft: 8 + depth * 17 }}
+        >
+          <span
+            className="grid h-5 w-5 shrink-0 place-items-center"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (!childFolders.length) return;
+              setExpanded((current) => {
+                const next = new Set(current);
+                next.has(folder.id) ? next.delete(folder.id) : next.add(folder.id);
+                return next;
+              });
+            }}
+          >
+            {childFolders.length ? (open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />) : <span className="h-1 w-1 rounded-full bg-slate-300" />}
+          </span>
+          <Folder className={`h-4 w-4 shrink-0 ${active ? 'text-[#2bbfba]' : 'text-slate-400'}`} />
+          <span className="truncate">{folder.name.replace(/王朝/g, '王潮')}</span>
+        </button>
+        {open ? childFolders.map((child) => renderFolder(child, depth + 1)) : null}
+      </div>
+    );
   };
 
-  const handleSave = async () => {
-    if (!detail) {
+  const handleOrganize = async () => {
+    if (!selectedFolderId || !sourceContent.trim()) return;
+    setOrganizing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const data = await folderAiPresetsApi.organize(selectedFolderId, sourceContent);
+      setQuestions(data.questions);
+      setWarnings(data.warnings || []);
+      setNotice(`已整理出 ${data.question_count} 条问答。请核对后再发布。`);
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'AI 整理失败');
+    } finally {
+      setOrganizing(false);
+    }
+  };
+
+  const handlePublish = async () => {
+    if (!selectedFolderId) return;
+    const validQuestions = questions.filter((item) => item.question.trim() && item.answer.trim());
+    if (!name.trim() || validQuestions.length === 0) {
+      setError('请填写名称，并至少保留一条完整问答');
       return;
     }
-
     setSaving(true);
-    setMessage(null);
     setError(null);
+    setNotice(null);
     try {
-      const saved = await presetPromptsApi.update(detail.id, {
-        name: editForm.name,
-        description: editForm.description,
-        content: editForm.content,
+      const saved = await folderAiPresetsApi.publish(selectedFolderId, {
+        preset_id: activePreset?.id,
+        name,
+        description,
+        source_content: sourceContent,
+        inherit_to_children: inheritToChildren,
+        questions: validQuestions,
       });
-      setDetail(saved);
-      setEditForm({
-        name: saved.name,
-        description: saved.description || '',
-        content: saved.content,
-      });
-      const latestId = await loadItems(saved.id);
-      if (latestId) {
-        await loadDetail(latestId);
-      }
-      setMessage('预设问题已保存');
+      setActivePreset(saved);
+      setQuestions(saved.questions);
+      setNotice(`已发布第 ${saved.version} 版，并完成 ${saved.questions.length} 条问题的检索索引。`);
     } catch (err: any) {
-      setError(err?.response?.data?.detail || '保存失败');
+      setError(err?.response?.data?.detail || '发布失败');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleCreate = async () => {
-    setCreating(true);
-    setMessage(null);
-    setError(null);
+  const handleSaveAgentPrompt = async () => {
+    if (!agentPrompt?.can_edit || !agentPromptContent.trim()) return;
+    setAgentPromptSaving(true);
+    setAgentPromptError(null);
+    setAgentPromptNotice(null);
     try {
-      const payload: CreatePresetPromptPayload = {
-        ...createForm,
-        department_name:
-          createForm.scope_type === 'department'
-            ? (isSuperAdmin ? createForm.department_name : managedDepartmentName)
-            : undefined,
-      };
-      const created = await presetPromptsApi.create(payload);
-      setCreateForm({
-        name: '',
-        scope_type: isSuperAdmin ? createForm.scope_type : 'department',
-        department_name: isSuperAdmin ? createForm.department_name || '' : managedDepartmentName,
-        description: '',
-        content: '',
-      });
-      setIsCreateMode(false);
-      const latestId = await loadItems(created.id);
-      if (latestId) {
-        await loadDetail(latestId);
-      }
-      setMessage('新的预设问题已创建');
+      const saved = await presetPromptsApi.update('agent-system', { content: agentPromptContent });
+      setAgentPrompt(saved);
+      setAgentPromptContent(saved.content || '');
+      setAgentPromptNotice('全局 Agent 设定已生效，后续回答会直接使用新版本。');
     } catch (err: any) {
-      setError(err?.response?.data?.detail || '创建失败');
+      setAgentPromptError(err?.response?.data?.detail || '全局 Agent 设定保存失败');
     } finally {
-      setCreating(false);
+      setAgentPromptSaving(false);
     }
   };
 
-  const handleStartDepartmentTest = (departmentName: string) => {
-    setTestDepartmentScope(departmentName);
-    setMessage(`已切换为按“${departmentName}”部门作用域测试，新的 AI 检索请求会按该部门生效`);
-    setError(null);
+  const updateQuestion = (index: number, patch: Partial<FolderAiPresetQuestion>) => {
+    setQuestions((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
   };
-
-  const handleStopDepartmentTest = () => {
-    clearTestDepartmentScope();
-    setMessage('已恢复默认组织作用域测试');
-    setError(null);
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-3 text-slate-300">
-        <Loader2 className="h-5 w-5 animate-spin" />
-        <span>预设问题加载中...</span>
-      </div>
-    );
-  }
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col gap-2">
-        <h1 className="text-3xl font-bold tracking-tight text-white">系统配置</h1>
-        <p className="text-sm text-slate-400">
-          维护全集团与部门级预设问题文件，Agent 会按用户所属部门自动加载对应内容。
-        </p>
-        <SystemSettingsTabs />
-      </div>
+    <div className="space-y-5 text-slate-800">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-[#23aaa7]">
+            <Sparkles className="h-4 w-4" />Folder AI
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900">文件夹预设问答</h1>
+          <p className="mt-2 text-sm text-slate-500">输入正常文本，AI 整理成可快速命中的问答；预览确认后才会发布。</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setActivePreset(null);
+            setName(`${selectedFolder?.name || '当前目录'}预设问答`);
+            setDescription('该目录的常见问题与标准答案');
+            setSourceContent('');
+            setQuestions([]);
+            setWarnings([]);
+          }}
+          disabled={!selectedFolderId}
+          className="inline-flex items-center gap-2 rounded-xl border border-[#bfe9e5] bg-white px-4 py-2.5 text-sm font-semibold text-[#198f91] shadow-sm transition hover:bg-[#f1fbfa] disabled:opacity-50"
+        >
+          <Plus className="h-4 w-4" />新建配置
+        </button>
+      </header>
 
-      {error ? <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div> : null}
-      {message ? <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">{message}</div> : null}
-      {testDepartmentScope ? (
-        <div className="rounded-xl border border-indigo-500/40 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-200">
-          当前测试作用域：{testDepartmentScope}。当前浏览器内新的 AI 检索请求会临时按该部门执行。
+      <section className="overflow-hidden rounded-[24px] border border-[#bfe9e5] bg-white shadow-[0_14px_38px_rgba(56,128,139,0.08)]">
+        <button
+          type="button"
+          onClick={() => setAgentPromptOpen((current) => !current)}
+          className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left md:px-6"
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#ddfaf5] to-[#e4f7ff] text-[#159b9b]">
+              <ShieldCheck className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-bold text-slate-900">全局 Agent 设定</h2>
+                <span className="rounded-full bg-[#e8faf7] px-2 py-0.5 text-[11px] font-semibold text-[#168f91]">所有非预设直答生效</span>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">只维护身份、回答边界和输出规则；产品、制度与业务知识请放在对应文件夹预设中。</p>
+            </div>
+          </div>
+          {agentPromptOpen ? <ChevronDown className="h-5 w-5 shrink-0 text-slate-400" /> : <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />}
+        </button>
+
+        {agentPromptOpen ? (
+          <div className="border-t border-slate-100 px-5 py-5 md:px-6">
+            {agentPromptLoading ? (
+              <div className="flex items-center gap-2 py-8 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" />正在读取当前生效提示词</div>
+            ) : (
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+                <div>
+                  <textarea
+                    value={agentPromptContent}
+                    onChange={(event) => setAgentPromptContent(event.target.value)}
+                    rows={12}
+                    readOnly={!agentPrompt?.can_edit}
+                    className="w-full resize-y rounded-2xl border border-slate-200 bg-[#fbfefd] px-4 py-3 text-sm leading-7 text-slate-700 outline-none transition focus:border-[#6ed6d0] focus:ring-4 focus:ring-[#6ed6d0]/10 read-only:cursor-default read-only:bg-slate-50"
+                  />
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-xs">
+                      {agentPromptError ? <span className="text-rose-600">{agentPromptError}</span> : null}
+                      {agentPromptNotice ? <span className="text-[#168f91]">{agentPromptNotice}</span> : null}
+                      {!agentPromptError && !agentPromptNotice ? <span className="text-slate-400">只有超级管理员可以修改；保存后无需重启服务。</span> : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveAgentPrompt()}
+                      disabled={!agentPrompt?.can_edit || agentPromptSaving || !agentPromptContent.trim()}
+                      className="inline-flex items-center gap-2 rounded-xl bg-[#14243b] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1c3553] disabled:opacity-45"
+                    >
+                      {agentPromptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      保存全局设定
+                    </button>
+                  </div>
+                </div>
+
+                <aside className="rounded-2xl border border-slate-200 bg-[#f8fcfc] p-4">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Zap className="h-4 w-4 text-[#20aaa7]" />当前回答链路</div>
+                  <ol className="mt-4 space-y-3 text-xs leading-5 text-slate-600">
+                    <li className="rounded-xl bg-white px-3 py-2"><b className="text-slate-800">1. 权限范围</b><br />只检查用户可见目录与文件。</li>
+                    <li className="rounded-xl bg-white px-3 py-2"><b className="text-slate-800">2. 文件夹预设</b><br />命中后直接返回管理员发布的答案。</li>
+                    <li className="rounded-xl bg-white px-3 py-2"><b className="text-slate-800">3. RAG 检索</b><br />未命中预设时才搜索可见文件总结。</li>
+                    <li className="rounded-xl bg-white px-3 py-2"><b className="text-slate-800">4. 最终回答</b><br />仅加载左侧全局设定与本次检索证据。</li>
+                  </ol>
+                </aside>
+              </div>
+            )}
+          </div>
+        ) : null}
+      </section>
+
+      {(error || notice) ? (
+        <div className={`rounded-2xl border px-4 py-3 text-sm ${error ? 'border-rose-200 bg-rose-50 text-rose-600' : 'border-[#bce9e3] bg-[#edfbf9] text-[#147f80]'}`}>
+          {error || notice}
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <div className="rounded-2xl border border-slate-700 bg-slate-800 p-5 shadow-lg">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-semibold text-white">预设列表</h2>
-              <p className="mt-1 text-xs text-slate-400">
-                {isSuperAdmin
-                  ? '超级管理员可查看并管理全部条目'
-                  : `管理员可查看全集团预设，编辑权限仍按所属部门控制；当前所属部门：${managedDepartmentName || '未绑定部门'}`}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setIsCreateMode(true);
-                setDetail(null);
-                setSelectedId(null);
-                setError(null);
-                setMessage(null);
-              }}
-              className="inline-flex items-center gap-2 rounded-xl bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-400"
-            >
-              <Plus className="h-4 w-4" />
-              新建
-            </button>
+      <div className="grid min-h-[720px] overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_18px_50px_rgba(56,128,139,0.08)] xl:grid-cols-[300px_minmax(0,1fr)]">
+        <aside className="border-b border-slate-100 bg-[#fbfefd] p-4 xl:border-b-0 xl:border-r">
+          <div className="relative mb-4">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input value={folderQuery} onChange={(event) => setFolderQuery(event.target.value)} placeholder="搜索文件夹" className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-[#6ed6d0] focus:ring-4 focus:ring-[#6ed6d0]/10" />
           </div>
-
-          <div className="space-y-3">
-            {items.length === 0 ? (
-              <div className="rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-5 text-sm text-slate-400">
-                暂无可管理的预设问题。
-              </div>
-            ) : (
-              items.map((item) => {
-                const isActive = !isCreateMode && selectedId === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handleSelect(item.id)}
-                    className={`w-full rounded-2xl border px-4 py-4 text-left transition-colors ${
-                      isActive
-                        ? 'border-indigo-500 bg-indigo-500/10'
-                        : 'border-slate-700 bg-slate-900/50 hover:border-slate-600'
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="rounded-xl bg-slate-700/60 p-2 text-slate-200">
-                        <FileText className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold text-white">{item.name}</div>
-                        <div className="mt-1 text-xs text-slate-400">
-                          {item.scope_type === 'global' ? '全集团' : item.department_name || '部门未设置'}
-                        </div>
-                        <div className="mt-2 text-xs text-slate-500">最近更新：{formatUpdatedAt(item.updated_at)}</div>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })
-            )}
+          <div className="max-h-[650px] overflow-y-auto pr-1">
+            {loadingTree ? <div className="flex items-center gap-2 p-4 text-sm text-slate-400"><Loader2 className="h-4 w-4 animate-spin" />加载目录树</div> : (children.get(null) || []).map((folder) => renderFolder(folder, 0))}
           </div>
-        </div>
+        </aside>
 
-        <div className="rounded-2xl border border-slate-700 bg-slate-800 p-6 shadow-lg">
-          {isCreateMode ? (
-            <div className="space-y-5">
-              <div>
-                <h2 className="text-xl font-semibold text-white">新建预设问题</h2>
-                <p className="mt-1 text-sm text-slate-400">新建后会自动生成对应的 Markdown 文件，并加入后台可编辑列表。</p>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-2">
-                  <span className="text-sm text-slate-300">名称</span>
-                  <input
-                    type="text"
-                    value={createForm.name}
-                    onChange={(event) => setCreateForm((prev) => ({ ...prev, name: event.target.value }))}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
-                    placeholder="例如：海口创意设计中心预设问题"
-                  />
-                </label>
-
-                <label className="space-y-2">
-                  <span className="text-sm text-slate-300">作用范围</span>
-                  <select
-                    value={createForm.scope_type}
-                    onChange={(event) =>
-                      setCreateForm((prev) => ({
-                        ...prev,
-                        scope_type: event.target.value as 'global' | 'department',
-                      }))
-                    }
-                    disabled={!isSuperAdmin}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500 disabled:opacity-70"
-                  >
-                    {isSuperAdmin ? <option value="global">全集团</option> : null}
-                    <option value="department">部门</option>
-                  </select>
-                </label>
-
-                {createForm.scope_type === 'department' ? (
-                  <label className="space-y-2 md:col-span-2">
-                    <span className="text-sm text-slate-300">部门名称</span>
-                    <input
-                      type="text"
-                      value={isSuperAdmin ? createForm.department_name || '' : managedDepartmentName}
-                      onChange={(event) => setCreateForm((prev) => ({ ...prev, department_name: event.target.value }))}
-                      disabled={!isSuperAdmin}
-                      className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500 disabled:opacity-70"
-                    />
-                  </label>
-                ) : null}
-
-                <label className="space-y-2 md:col-span-2">
-                  <span className="text-sm text-slate-300">说明</span>
-                  <input
-                    type="text"
-                    value={createForm.description || ''}
-                    onChange={(event) => setCreateForm((prev) => ({ ...prev, description: event.target.value }))}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500"
-                    placeholder="选填，方便后台识别用途"
-                  />
-                </label>
-              </div>
-
-              <label className="block space-y-2">
-                <span className="text-sm text-slate-300">Markdown 内容</span>
-                <textarea
-                  value={createForm.content}
-                  onChange={(event) => setCreateForm((prev) => ({ ...prev, content: event.target.value }))}
-                  className="min-h-[420px] w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition focus:border-indigo-500"
-                  placeholder="# 预设问题标题"
-                />
-              </label>
-
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={handleCreate}
-                  disabled={creating}
-                  className="inline-flex items-center gap-2 rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:opacity-60"
-                >
-                  {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                  创建预设问题
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCreateMode(false);
-                    if (items[0]?.id) {
-                      void handleSelect(items[0].id);
-                    }
-                  }}
-                  className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm text-slate-300 transition-colors hover:border-slate-600 hover:text-slate-100"
-                >
-                  取消
-                </button>
-              </div>
-            </div>
-          ) : detailLoading ? (
-            <div className="flex items-center gap-3 text-slate-300">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              <span>正在加载内容...</span>
-            </div>
-          ) : detail ? (
-            <div className="space-y-5">
-              <div className="flex flex-wrap items-start justify-between gap-4">
+        <main className="min-w-0 p-5 md:p-7">
+          {loadingPreset ? (
+            <div className="grid min-h-[560px] place-items-center text-slate-400"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : selectedFolder ? (
+            <div className="space-y-6">
+              <section className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-5">
                 <div>
-                  <h2 className="text-xl font-semibold text-white">{detail.name}</h2>
-                  <p className="mt-1 text-sm text-slate-400">
-                    {detail.scope_type === 'global' ? '全集团统一文件' : `部门文件：${detail.department_name || '-'}`}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    文件位置：{detail.relative_path}，最近更新：{formatUpdatedAt(detail.updated_at)}
-                  </p>
+                  <div className="flex items-center gap-2 text-xs text-slate-400"><Folder className="h-4 w-4" />当前绑定目录</div>
+                  <h2 className="mt-2 text-xl font-bold text-slate-900">{selectedFolder.name.replace(/王朝/g, '王潮')}</h2>
+                  <p className="mt-1 text-sm text-slate-500">用户必须能查看该目录，才可能命中这里发布的答案。</p>
                 </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  {detail.scope_type === 'department' && detail.department_name ? (
-                    testDepartmentScope === detail.department_name ? (
-                      <button
-                        type="button"
-                        onClick={handleStopDepartmentTest}
-                        className="inline-flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-200 transition-colors hover:bg-amber-500/20"
-                      >
-                        <Square className="h-4 w-4" />
-                        停止该部门测试
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleStartDepartmentTest(detail.department_name!)}
-                        className="inline-flex items-center gap-2 rounded-xl bg-sky-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-400"
-                      >
-                        <Play className="h-4 w-4" />
-                        按该部门测试
-                      </button>
-                    )
-                  ) : testDepartmentScope ? (
-                    <button
-                      type="button"
-                      onClick={handleStopDepartmentTest}
-                      className="inline-flex items-center gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm font-medium text-amber-200 transition-colors hover:bg-amber-500/20"
-                    >
-                      <Square className="h-4 w-4" />
-                      恢复默认测试
-                    </button>
-                  ) : null}
-                  <div className="rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1 text-xs text-slate-300">
-                    {detail.can_edit ? '可编辑' : '只读'}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="space-y-2">
-                  <span className="text-sm text-slate-300">名称</span>
-                  <input
-                    type="text"
-                    value={editForm.name}
-                    onChange={(event) => setEditForm((prev) => ({ ...prev, name: event.target.value }))}
-                    disabled={!detail.can_edit}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500 disabled:opacity-70"
-                  />
+                <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  <input type="checkbox" checked={inheritToChildren} onChange={(event) => setInheritToChildren(event.target.checked)} className="h-4 w-4 accent-[#2bbfba]" />
+                  子文件夹继承
                 </label>
+              </section>
 
-                <label className="space-y-2">
-                  <span className="text-sm text-slate-300">说明</span>
-                  <input
-                    type="text"
-                    value={editForm.description}
-                    onChange={(event) => setEditForm((prev) => ({ ...prev, description: event.target.value }))}
-                    disabled={!detail.can_edit}
-                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none transition focus:border-indigo-500 disabled:opacity-70"
-                  />
-                </label>
-              </div>
+              <section className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2 text-sm font-medium text-slate-700">配置名称<input value={name} onChange={(event) => setName(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3.5 py-3 font-normal outline-none focus:border-[#6ed6d0] focus:ring-4 focus:ring-[#6ed6d0]/10" /></label>
+                <label className="space-y-2 text-sm font-medium text-slate-700">说明<input value={description} onChange={(event) => setDescription(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3.5 py-3 font-normal outline-none focus:border-[#6ed6d0] focus:ring-4 focus:ring-[#6ed6d0]/10" /></label>
+              </section>
 
-              <label className="block space-y-2">
-                <span className="text-sm text-slate-300">Markdown 内容</span>
-                <textarea
-                  value={editForm.content}
-                  onChange={(event) => setEditForm((prev) => ({ ...prev, content: event.target.value }))}
-                  disabled={!detail.can_edit}
-                  className="min-h-[520px] w-full rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition focus:border-indigo-500 disabled:opacity-70"
-                />
-              </label>
-
-              {detail.can_edit ? (
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="inline-flex items-center gap-2 rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:opacity-60"
-                  >
-                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    保存修改
+              <section className="rounded-2xl border border-slate-200 bg-[#fbfefd] p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div><h3 className="font-semibold text-slate-900">原始问题文本</h3><p className="mt-1 text-xs text-slate-500">可直接粘贴制度、FAQ、流程或普通段落，无需手写 Markdown 格式。</p></div>
+                  <button type="button" onClick={() => void handleOrganize()} disabled={organizing || !sourceContent.trim()} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#45d5c4] to-[#39bfe0] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(53,190,190,0.2)] disabled:opacity-50">
+                    {organizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}AI 整理并预览
                   </button>
                 </div>
-              ) : null}
+                <textarea value={sourceContent} onChange={(event) => setSourceContent(event.target.value)} rows={10} placeholder="例如：会议室需要在钉钉工作台的会议室应用中预定……" className="w-full resize-y rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-7 outline-none focus:border-[#6ed6d0] focus:ring-4 focus:ring-[#6ed6d0]/10" />
+                {warnings.map((warning) => <div key={warning} className="mt-2 flex items-start gap-2 text-xs leading-5 text-amber-600"><CircleHelp className="mt-0.5 h-3.5 w-3.5 shrink-0" />{warning}</div>)}
+              </section>
+
+              <section>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div><h3 className="font-semibold text-slate-900">发布前预览</h3><p className="mt-1 text-xs text-slate-500">标准问题和口语别名用于命中；答案按这里的文本原样优先返回。</p></div>
+                  <button type="button" onClick={() => setQuestions((current) => [...current, emptyQuestion()])} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"><Plus className="h-3.5 w-3.5" />添加问答</button>
+                </div>
+                <div className="space-y-3">
+                  {questions.map((item, index) => (
+                    <article key={item.id || `draft-${index}`} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_190px_auto]">
+                        <input value={item.question} onChange={(event) => updateQuestion(index, { question: event.target.value })} placeholder="标准问题" className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm font-semibold outline-none focus:border-[#6ed6d0]" />
+                        <input value={(item.aliases || []).join('，')} onChange={(event) => updateQuestion(index, { aliases: event.target.value.split(/[，,]/).map((value) => value.trim()).filter(Boolean) })} placeholder="口语别名，用逗号分隔" className="rounded-xl border border-slate-200 px-3 py-2.5 text-xs outline-none focus:border-[#6ed6d0]" />
+                        <button type="button" onClick={() => setQuestions((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="grid h-10 w-10 place-items-center rounded-xl text-slate-400 hover:bg-rose-50 hover:text-rose-500" aria-label="删除该问答"><Trash2 className="h-4 w-4" /></button>
+                      </div>
+                      <textarea value={item.answer} onChange={(event) => updateQuestion(index, { answer: event.target.value })} rows={4} placeholder="标准答案" className="mt-3 w-full resize-y rounded-xl border border-slate-200 px-3 py-2.5 text-sm leading-6 outline-none focus:border-[#6ed6d0]" />
+                    </article>
+                  ))}
+                  {questions.length === 0 ? <div className="grid min-h-44 place-items-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 text-center text-sm text-slate-400"><div><FileText className="mx-auto mb-2 h-6 w-6" />粘贴文本后点击“AI 整理并预览”</div></div> : null}
+                </div>
+              </section>
+
+              <div className="flex justify-end border-t border-slate-100 pt-5">
+                <button type="button" onClick={() => void handlePublish()} disabled={saving || questions.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-[#14243b] px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-300/40 transition hover:bg-[#1c3553] disabled:opacity-50">
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}确认发布
+                </button>
+              </div>
             </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-900/40 px-6 py-12 text-center text-slate-400">
-              请选择左侧预设问题，或点击“新建”创建新的 Markdown 配置文件。
-            </div>
-          )}
-        </div>
+          ) : <div className="grid min-h-[560px] place-items-center text-sm text-slate-400">请选择文件夹</div>}
+        </main>
       </div>
     </div>
   );

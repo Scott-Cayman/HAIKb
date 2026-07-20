@@ -63,10 +63,7 @@ def analyze_database():
     print("\n正在分析数据库...")
     try:
         with engine.connect() as conn:
-            if "sqlite" in str(engine.url):
-                conn.execute(text("ANALYZE"))
-            else:
-                conn.execute(text("ANALYZE"))
+            conn.execute(text("ANALYZE"))
             conn.commit()
         print("数据库分析完成！")
     except Exception as e:
@@ -76,4 +73,3 @@ def analyze_database():
 if __name__ == "__main__":
     create_indexes()
     analyze_database()
-

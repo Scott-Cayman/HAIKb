@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from app.database import SessionLocal
+from app.config import settings
 from app.rag.base_index import BaseIndex
 from app.rag.doc_store import SummaryDocStore
 from app.rag.keyword_store import KeywordStore
 from app.rag.pipelines import SummaryIndexingPipeline
 from app.rag.retriever_optimized import OptimizedSummaryRetrievalPipeline
 from app.rag.vector_store_optimized import VectorStoreAdapter
+from app.rag.pgvector_store import PgVectorStoreAdapter
 
 
 class SummaryFileIndex(BaseIndex):
@@ -17,7 +19,10 @@ class SummaryFileIndex(BaseIndex):
 
     def on_start(self) -> None:
         collection_name = f"summary_index_{self.id}"
-        self.vector_store = VectorStoreAdapter(collection_name=collection_name)
+        if settings.VECTOR_STORE.strip().lower() == "pgvector":
+            self.vector_store = PgVectorStoreAdapter(index_id=self.id)
+        else:
+            self.vector_store = VectorStoreAdapter(collection_name=collection_name)
         self.doc_store = SummaryDocStore(index_id=self.id, db_factory=SessionLocal)
         self.keyword_store = KeywordStore(index_id=self.id, db_factory=SessionLocal)
 

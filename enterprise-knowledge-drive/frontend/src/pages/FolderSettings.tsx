@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, FolderCog, ImageUp, Palette, Save, ShieldCheck, Users } from 'lucide-react';
 
 import FolderVisualEditor from '../components/folders/FolderVisualEditor';
@@ -38,16 +38,25 @@ type PermissionContext = {
   can_manage_settings: boolean;
 };
 
+type PermissionRule = {
+  capability: 'view' | 'download' | 'edit' | 'upload' | 'delete';
+  subject_type: 'all' | 'org' | 'user';
+  subject_value?: string | null;
+};
+
 type FolderSettingsResponse = {
   folder: FolderBasic;
   manager_users: FolderUser[];
   candidate_users: FolderUser[];
+  available_org_units: string[];
+  permission_rules: PermissionRule[];
   permission_context: PermissionContext;
 };
 
 const FolderSettings = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -57,13 +66,16 @@ const FolderSettings = () => {
   const [folder, setFolder] = useState<FolderBasic | null>(null);
   const [permissionContext, setPermissionContext] = useState<PermissionContext | null>(null);
   const [candidateUsers, setCandidateUsers] = useState<FolderUser[]>([]);
+  const [availableOrgUnits, setAvailableOrgUnits] = useState<string[]>([]);
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [selectedOrgUnit, setSelectedOrgUnit] = useState('');
+  const [selectedUserId, setSelectedUserId] = useState('');
   const [form, setForm] = useState({
     name: '',
     description: '',
     display_mode: 'icon' as FolderDisplayMode,
     cover_url: '',
-    icon_key: 'book-open',
+    icon_key: 'folder',
     icon_bg_from: '#8cf3d5',
     icon_bg_to: '#44d7cc',
     icon_color: '#ffffff',
@@ -72,6 +84,11 @@ const FolderSettings = () => {
     card_bg_to: '#c1f7ec',
     card_glow_color: '#ffffff',
     manager_user_ids: [] as number[],
+    view_rules: [] as PermissionRule[],
+    download_rules: [] as PermissionRule[],
+    edit_rules: [] as PermissionRule[],
+    upload_rules: [] as PermissionRule[],
+    delete_rules: [] as PermissionRule[],
   });
 
   useEffect(() => {
@@ -88,6 +105,7 @@ const FolderSettings = () => {
         setFolder(data.folder);
         setPermissionContext(data.permission_context);
         setCandidateUsers(data.candidate_users);
+        setAvailableOrgUnits(data.available_org_units || []);
         setForm({
           name: data.folder.name || '',
           description: data.folder.description || '',
@@ -102,6 +120,11 @@ const FolderSettings = () => {
           card_bg_to: visual.cardBgTo,
           card_glow_color: visual.cardGlowColor,
           manager_user_ids: data.manager_users.map((user) => user.id),
+          view_rules: data.permission_rules.filter((rule) => rule.capability === 'view'),
+          download_rules: data.permission_rules.filter((rule) => rule.capability === 'download'),
+          edit_rules: data.permission_rules.filter((rule) => rule.capability === 'edit'),
+          upload_rules: data.permission_rules.filter((rule) => rule.capability === 'upload'),
+          delete_rules: data.permission_rules.filter((rule) => rule.capability === 'delete'),
         });
       } catch (err: any) {
         setError(err?.response?.data?.detail || '加载文件夹配置失败');
@@ -112,6 +135,14 @@ const FolderSettings = () => {
 
     fetchSettings();
   }, [id]);
+
+  useEffect(() => {
+    if (loading || (location.state as { focusSection?: string } | null)?.focusSection !== 'visual') return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById('folder-visual-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, location.state]);
 
   const filteredCandidates = useMemo(() => {
     const keyword = searchKeyword.trim().toLowerCase();
@@ -128,6 +159,11 @@ const FolderSettings = () => {
     [candidateUsers, form.manager_user_ids],
   );
 
+  const availableUsersForRules = useMemo(
+    () => candidateUsers.filter((user) => !form.manager_user_ids.includes(user.id) || true),
+    [candidateUsers, form.manager_user_ids],
+  );
+
   const toggleManager = (userId: number) => {
     setForm((prev) => ({
       ...prev,
@@ -135,6 +171,33 @@ const FolderSettings = () => {
         ? prev.manager_user_ids.filter((id) => id !== userId)
         : [...prev.manager_user_ids, userId],
     }));
+  };
+
+  const addRule = (capability: PermissionRule['capability'], rule: Omit<PermissionRule, 'capability'>) => {
+    setForm((prev) => {
+      const key = `${capability}_rules` as const;
+      const currentRules = prev[key];
+      const exists = currentRules.some(
+        (item) => item.subject_type === rule.subject_type && item.subject_value === (rule.subject_value || null),
+      );
+      if (exists) return prev;
+      return {
+        ...prev,
+        [key]: [...currentRules, { capability, ...rule }],
+      };
+    });
+  };
+
+  const removeRule = (capability: PermissionRule['capability'], rule: PermissionRule) => {
+    setForm((prev) => {
+      const key = `${capability}_rules` as const;
+      return {
+        ...prev,
+        [key]: prev[key].filter(
+          (item) => !(item.subject_type === rule.subject_type && item.subject_value === rule.subject_value),
+        ),
+      };
+    });
   };
 
   const handleSave = async () => {
@@ -158,6 +221,11 @@ const FolderSettings = () => {
         card_bg_to: form.card_bg_to,
         card_glow_color: form.card_glow_color,
         manager_user_ids: form.manager_user_ids,
+        view_rules: form.view_rules.map(({ subject_type, subject_value }) => ({ subject_type, subject_value })),
+        download_rules: form.download_rules.map(({ subject_type, subject_value }) => ({ subject_type, subject_value })),
+        edit_rules: form.edit_rules.map(({ subject_type, subject_value }) => ({ subject_type, subject_value })),
+        upload_rules: form.upload_rules.map(({ subject_type, subject_value }) => ({ subject_type, subject_value })),
+        delete_rules: form.delete_rules.map(({ subject_type, subject_value }) => ({ subject_type, subject_value })),
       });
 
       const data = response.data;
@@ -166,6 +234,7 @@ const FolderSettings = () => {
       setFolder(data.folder);
       setPermissionContext(data.permission_context);
       setCandidateUsers(data.candidate_users);
+      setAvailableOrgUnits(data.available_org_units || []);
       setForm((prev) => ({
         ...prev,
         name: data.folder.name || '',
@@ -181,8 +250,13 @@ const FolderSettings = () => {
         card_bg_to: visual.cardBgTo,
         card_glow_color: visual.cardGlowColor,
         manager_user_ids: data.manager_users.map((user) => user.id),
+        view_rules: data.permission_rules.filter((rule) => rule.capability === 'view'),
+        download_rules: data.permission_rules.filter((rule) => rule.capability === 'download'),
+        edit_rules: data.permission_rules.filter((rule) => rule.capability === 'edit'),
+        upload_rules: data.permission_rules.filter((rule) => rule.capability === 'upload'),
+        delete_rules: data.permission_rules.filter((rule) => rule.capability === 'delete'),
       }));
-      setMessage('文件夹视觉配置已保存');
+      setMessage('文件夹配置已保存');
     } catch (err: any) {
       setError(err?.response?.data?.detail || '保存失败，请稍后重试');
     } finally {
@@ -227,6 +301,30 @@ const FolderSettings = () => {
     }
   };
 
+  const renderRuleChips = (capability: PermissionRule['capability'], rules: PermissionRule[]) => (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {rules.map((rule) => {
+        const label =
+          rule.subject_type === 'all'
+            ? '全部成员'
+            : rule.subject_type === 'org'
+              ? `组织：${rule.subject_value}`
+              : `成员：${candidateUsers.find((user) => String(user.id) === String(rule.subject_value))?.name || rule.subject_value}`;
+        return (
+          <button
+            key={`${capability}-${rule.subject_type}-${rule.subject_value || 'all'}`}
+            type="button"
+            onClick={() => removeRule(capability, rule)}
+            className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-200"
+          >
+            {label} ×
+          </button>
+        );
+      })}
+      {rules.length === 0 ? <span className="text-sm text-slate-400">未单独配置，默认沿用当前目录已有规则。</span> : null}
+    </div>
+  );
+
   if (loading) {
     return <div className="p-8 text-center text-slate-500">加载文件夹配置中...</div>;
   }
@@ -241,7 +339,7 @@ const FolderSettings = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -364,11 +462,189 @@ const FolderSettings = () => {
                   </div>
                 </div>
               </div>
+
+              <div className="border-t border-slate-200 pt-5">
+                <div className="text-sm font-semibold text-slate-900">访问能力规则</div>
+                <p className="mt-1 text-sm text-slate-500">支持按全部成员、组织路径、指定成员配置“可见 / 下载 / 编辑”三类能力。</p>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-[1fr_1fr_auto_auto]">
+                  <select
+                    value={selectedOrgUnit}
+                    onChange={(event) => setSelectedOrgUnit(event.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  >
+                    <option value="">选择组织路径</option>
+                    {availableOrgUnits.map((unit) => (
+                      <option key={unit} value={unit}>
+                        {unit}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={selectedUserId}
+                    onChange={(event) => setSelectedUserId(event.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  >
+                    <option value="">选择成员</option>
+                    {availableUsersForRules.map((user) => (
+                      <option key={user.id} value={String(user.id)}>
+                        {user.name} {user.department_name ? `- ${user.department_name}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => addRule('view', { subject_type: 'all', subject_value: null })}
+                    className="rounded-xl bg-slate-100 px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200"
+                  >
+                    添加全员可见
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addRule('edit', { subject_type: 'all', subject_value: null })}
+                    className="rounded-xl bg-slate-100 px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200"
+                  >
+                    添加全员可编辑
+                  </button>
+                </div>
+
+                <div className="mt-5 space-y-4">
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">可见权限</div>
+                        <div className="mt-1 text-xs text-slate-500">控制目录是否出现在当前成员可浏览范围内。</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => selectedOrgUnit && addRule('view', { subject_type: 'org', subject_value: selectedOrgUnit })}
+                          className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          添加组织
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => selectedUserId && addRule('view', { subject_type: 'user', subject_value: selectedUserId })}
+                          className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          添加成员
+                        </button>
+                      </div>
+                    </div>
+                    {renderRuleChips('view', form.view_rules)}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">下载权限</div>
+                        <div className="mt-1 text-xs text-slate-500">控制当前目录下文件的下载能力。</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => selectedOrgUnit && addRule('download', { subject_type: 'org', subject_value: selectedOrgUnit })}
+                          className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          添加组织
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => selectedUserId && addRule('download', { subject_type: 'user', subject_value: selectedUserId })}
+                          className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          添加成员
+                        </button>
+                      </div>
+                    </div>
+                    {renderRuleChips('download', form.download_rules)}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">编辑权限</div>
+                        <div className="mt-1 text-xs text-slate-500">控制重命名、删除和上传能力；配置页仍仅限创建者、文件夹管理者和超级管理员。</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => selectedOrgUnit && addRule('edit', { subject_type: 'org', subject_value: selectedOrgUnit })}
+                          className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          添加组织
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => selectedUserId && addRule('edit', { subject_type: 'user', subject_value: selectedUserId })}
+                          className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          添加成员
+                        </button>
+                      </div>
+                    </div>
+                    {renderRuleChips('edit', form.edit_rules)}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">上传与新建权限</div>
+                        <div className="mt-1 text-xs text-slate-500">允许普通用户上传文件，并在本目录中创建子文件夹。</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => selectedOrgUnit && addRule('upload', { subject_type: 'org', subject_value: selectedOrgUnit })}
+                          className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          添加组织
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => selectedUserId && addRule('upload', { subject_type: 'user', subject_value: selectedUserId })}
+                          className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                        >
+                          添加成员
+                        </button>
+                      </div>
+                    </div>
+                    {renderRuleChips('upload', form.upload_rules)}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">删除权限</div>
+                        <div className="mt-1 text-xs text-slate-500">允许普通用户删除本目录中的文件与子文件夹，所有操作都会写入审计记录。</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => selectedOrgUnit && addRule('delete', { subject_type: 'org', subject_value: selectedOrgUnit })}
+                          className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100"
+                        >
+                          添加组织
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => selectedUserId && addRule('delete', { subject_type: 'user', subject_value: selectedUserId })}
+                          className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-100"
+                        >
+                          添加成员
+                        </button>
+                      </div>
+                    </div>
+                    {renderRuleChips('delete', form.delete_rules)}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section id="folder-visual-settings" className="scroll-mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-center gap-2">
             <Palette className="h-5 w-5 text-violet-600" />
             <h2 className="text-lg font-semibold text-slate-900">视觉模式</h2>

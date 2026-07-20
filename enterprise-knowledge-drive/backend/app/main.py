@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.database import Base, engine
+from app.database import Base, engine, verify_database_connection
 from app.models import (
     AgentMessage,
     AuditLog,
@@ -17,18 +17,32 @@ from app.models import (
     FolderSummary,
     RagIndex,
     RagIndexRelation,
+    ResourcePermission,
     RagSource,
     SummaryChunk,
     SystemSetting,
     User,
     UserFileView,
+    FolderAiPreset,
+    FolderAiPresetQuestion,
+    FolderAiPresetTrigger,
 )
 from app.rag.index_manager import index_manager
-from app.routers import admin, agent, auth, favorites, files, folders, rag
-from app.schema_patches import ensure_folder_visual_columns
+from app.routers import admin, agent, auth, favorites, files, folders, folder_ai_presets, rag
+from app.services.file_preview_service import recover_interrupted_thumbnail_jobs
+from app.schema_patches import (
+    ensure_file_preview_columns,
+    ensure_folder_visual_columns,
+    ensure_resource_permission_columns,
+    ensure_user_department_paths_column,
+)
 
+verify_database_connection()
 Base.metadata.create_all(bind=engine)
 ensure_folder_visual_columns(engine)
+ensure_resource_permission_columns(engine)
+ensure_user_department_paths_column(engine)
+ensure_file_preview_columns(engine)
 
 app = FastAPI(title="Enterprise Knowledge Drive")
 
@@ -43,6 +57,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_event():
+    recover_interrupted_thumbnail_jobs()
     index_manager.on_application_startup()
 
 
@@ -55,6 +70,7 @@ app.include_router(folders.router, prefix="/api/folders", tags=["folders"])
 app.include_router(files.router, prefix="/api/files", tags=["files"])
 app.include_router(favorites.router, prefix="/api/favorites", tags=["favorites"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(folder_ai_presets.router, prefix="/api/admin/folders", tags=["folder-ai-presets"])
 app.include_router(rag.router, prefix="/api/rag", tags=["rag"])
 app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
 

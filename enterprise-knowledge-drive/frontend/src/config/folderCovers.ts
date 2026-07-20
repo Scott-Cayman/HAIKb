@@ -1,4 +1,4 @@
-import { defaultHomeAppearance, type FolderCardAppearance } from './homeAppearance';
+import { defaultHomeAppearance, type PinnedFolderAppearance } from './homeAppearance';
 import { getFolderVisualConfig, type FolderDisplayMode } from './folderVisuals';
 
 export type FolderCoverConfig = {
@@ -8,7 +8,7 @@ export type FolderCoverConfig = {
   subtitle: string;
   statsLabel: string;
   imageUrl?: string;
-  theme: FolderCardAppearance;
+  theme: PinnedFolderAppearance;
   displayMode: FolderDisplayMode;
   iconKey: string;
   iconBgFrom: string;
@@ -87,7 +87,7 @@ export const getFolderCoverConfig = (
     card_bg_to?: string | null;
     card_glow_color?: string | null;
   },
-  theme: FolderCardAppearance = defaultHomeAppearance.folderCard,
+  theme: PinnedFolderAppearance = defaultHomeAppearance.folderCard,
 ) => {
   const matched =
     folderCoverConfigs.find((item) => item.folderId === folder.id) ||

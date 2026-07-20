@@ -16,7 +16,10 @@ class DepartmentScopeService:
         return normalized or None
 
     def can_use_override(self, user: Optional[User]) -> bool:
-        return bool(user and (user.is_admin or user.is_super_admin))
+        # Department overrides are a super-admin diagnostic feature. Allowing a
+        # department administrator to override this value would expand both the
+        # visible-file set and the AI retrieval scope beyond their own branch.
+        return bool(user and user.is_super_admin)
 
     def build_scoped_user(self, user: User, override_department_name: Optional[str]) -> User:
         normalized_department_name = self.normalize_override_department_name(override_department_name)

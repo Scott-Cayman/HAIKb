@@ -38,6 +38,7 @@ export type CollectionItem = {
   action?: CollectionPrimaryAction | null;
   menu?: ReactNode;
   previewStatus?: string | null;
+  thumbnailStatus?: string | null;
   fileExt?: string | null;
   iconKey?: string | null;
   iconBgFrom?: string | null;

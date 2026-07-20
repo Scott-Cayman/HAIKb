@@ -10,59 +10,25 @@ export type SurfaceColors = {
   border?: string;
 };
 
-export type FolderCardAppearance = {
-  gradient: GradientColors;
-  glowColor: string;
+export type PinnedFolderAppearance = {
   badge: SurfaceColors;
-  iconGradient: GradientColors;
-  iconColor: string;
 };
 
 export type HomeAppearanceConfig = {
-  headerBadge: SurfaceColors;
-  utilityButton: SurfaceColors & { hoverText: string };
   searchBox: Pick<SurfaceColors, 'bg' | 'border'>;
   aiButton: GradientColors & { text: string };
   keywordButton: SurfaceColors;
-  folderCard: FolderCardAppearance;
-  folderListIcon: GradientColors & { iconColor: string; hoverText: string };
-  fileListIcon: GradientColors & { iconColor: string };
-  folderLink: SurfaceColors;
-  viewToggle: { trackBg: string; activeBg: string; activeText: string };
-  previewButton: SurfaceColors;
+  folderCard: PinnedFolderAppearance;
 };
 
 export type HomeAppearanceConfigInput = Partial<{
-  headerBadge: Partial<HomeAppearanceConfig['headerBadge']>;
-  utilityButton: Partial<HomeAppearanceConfig['utilityButton']>;
   searchBox: Partial<HomeAppearanceConfig['searchBox']>;
   aiButton: Partial<HomeAppearanceConfig['aiButton']>;
   keywordButton: Partial<HomeAppearanceConfig['keywordButton']>;
-  folderCard: Partial<{
-    gradient: Partial<HomeAppearanceConfig['folderCard']['gradient']>;
-    glowColor: string;
-    badge: Partial<HomeAppearanceConfig['folderCard']['badge']>;
-    iconGradient: Partial<HomeAppearanceConfig['folderCard']['iconGradient']>;
-    iconColor: string;
-  }>;
-  folderListIcon: Partial<HomeAppearanceConfig['folderListIcon']>;
-  fileListIcon: Partial<HomeAppearanceConfig['fileListIcon']>;
-  folderLink: Partial<HomeAppearanceConfig['folderLink']>;
-  viewToggle: Partial<HomeAppearanceConfig['viewToggle']>;
-  previewButton: Partial<HomeAppearanceConfig['previewButton']>;
+  folderCard: Partial<{ badge: Partial<HomeAppearanceConfig['folderCard']['badge']> }>;
 }>;
 
 export const defaultHomeAppearance: HomeAppearanceConfig = {
-  headerBadge: {
-    bg: '#eefcf8',
-    text: '#36b7a7',
-  },
-  utilityButton: {
-    bg: '#ffffff',
-    text: '#94a3b8',
-    border: '#e2e8f0',
-    hoverText: '#475569',
-  },
   searchBox: {
     bg: '#ffffff',
     border: '#d9e8e4',
@@ -77,45 +43,10 @@ export const defaultHomeAppearance: HomeAppearanceConfig = {
     text: '#64748b',
   },
   folderCard: {
-    gradient: {
-      from: '#ebfff7',
-      via: '#d8fff3',
-      to: '#c1f7ec',
-    },
-    glowColor: '#ffffff',
     badge: {
       bg: '#ffffff',
       text: '#5e7d92',
     },
-    iconGradient: {
-      from: '#8cf3d5',
-      to: '#44d7cc',
-    },
-    iconColor: '#ffffff',
-  },
-  folderListIcon: {
-    from: '#d9fef2',
-    to: '#daeaff',
-    iconColor: '#3abdb1',
-    hoverText: '#35b9ac',
-  },
-  fileListIcon: {
-    from: '#ffe0a8',
-    to: '#ffc0b0',
-    iconColor: '#f08c38',
-  },
-  folderLink: {
-    bg: '#f5fbfa',
-    text: '#34b8aa',
-  },
-  viewToggle: {
-    trackBg: '#f5fbfa',
-    activeBg: '#ffffff',
-    activeText: '#33beae',
-  },
-  previewButton: {
-    bg: '#eefcf8',
-    text: '#34b8aa',
   },
 };
 
@@ -133,14 +64,6 @@ export const radialGlowToCss = (color: string) =>
 export const mergeHomeAppearanceConfig = (
   overrides?: HomeAppearanceConfigInput | null,
 ): HomeAppearanceConfig => ({
-  headerBadge: {
-    ...defaultHomeAppearance.headerBadge,
-    ...overrides?.headerBadge,
-  },
-  utilityButton: {
-    ...defaultHomeAppearance.utilityButton,
-    ...overrides?.utilityButton,
-  },
   searchBox: {
     ...defaultHomeAppearance.searchBox,
     ...overrides?.searchBox,
@@ -154,39 +77,9 @@ export const mergeHomeAppearanceConfig = (
     ...overrides?.keywordButton,
   },
   folderCard: {
-    ...defaultHomeAppearance.folderCard,
-    ...overrides?.folderCard,
-    gradient: {
-      ...defaultHomeAppearance.folderCard.gradient,
-      ...overrides?.folderCard?.gradient,
-    },
     badge: {
       ...defaultHomeAppearance.folderCard.badge,
       ...overrides?.folderCard?.badge,
     },
-    iconGradient: {
-      ...defaultHomeAppearance.folderCard.iconGradient,
-      ...overrides?.folderCard?.iconGradient,
-    },
-  },
-  folderListIcon: {
-    ...defaultHomeAppearance.folderListIcon,
-    ...overrides?.folderListIcon,
-  },
-  fileListIcon: {
-    ...defaultHomeAppearance.fileListIcon,
-    ...overrides?.fileListIcon,
-  },
-  folderLink: {
-    ...defaultHomeAppearance.folderLink,
-    ...overrides?.folderLink,
-  },
-  viewToggle: {
-    ...defaultHomeAppearance.viewToggle,
-    ...overrides?.viewToggle,
-  },
-  previewButton: {
-    ...defaultHomeAppearance.previewButton,
-    ...overrides?.previewButton,
   },
 });

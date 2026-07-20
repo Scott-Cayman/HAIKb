@@ -18,12 +18,15 @@ def prepare_temp_environment() -> Path:
     preview_dir = storage / "previews"
     summary_dir = storage / "summaries"
     rag_dir = storage / "rag"
-    data_dir = root / "data"
-
-    for path in [storage, preview_dir, summary_dir, rag_dir, rag_dir / "vectors", rag_dir / "docs", data_dir]:
+    for path in [storage, preview_dir, summary_dir, rag_dir, rag_dir / "vectors", rag_dir / "docs"]:
         path.mkdir(parents=True, exist_ok=True)
 
-    os.environ["DATABASE_URL"] = f"sqlite:///{(data_dir / 'app.db').resolve()}"
+    test_database_url = os.environ.get("HAIKB_TEST_DATABASE_URL", "").strip()
+    if not test_database_url.lower().startswith(("postgresql://", "postgresql+psycopg2://")):
+        raise RuntimeError(
+            "Set HAIKB_TEST_DATABASE_URL to an isolated PostgreSQL test database before running this script."
+        )
+    os.environ["DATABASE_URL"] = test_database_url
     os.environ["STORAGE_DIR"] = str(storage)
     os.environ["PREVIEW_DIR"] = str(preview_dir)
     os.environ["SUMMARY_DIR"] = str(summary_dir)

@@ -91,12 +91,12 @@ const Recent = () => {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div className="flex items-center space-x-3">
         <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center">
           <Clock className="w-5 h-5 text-blue-600" />
         </div>
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">最近访问</h1>
+        <h1 className="text-xl font-bold tracking-tight text-slate-900 md:text-2xl">最近访问</h1>
       </div>
 
       <div className="bg-white border border-slate-100 rounded-2xl overflow-hidden shadow-sm">
@@ -108,7 +108,7 @@ const Recent = () => {
           sizeColumn={{ label: '大小' }}
           dateColumn={{ label: '访问时间' }}
           emptyState={
-            <div className="p-12 text-center">
+            <div className="p-8 text-center md:p-12">
               <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Clock className="w-8 h-8 text-slate-400" />
               </div>

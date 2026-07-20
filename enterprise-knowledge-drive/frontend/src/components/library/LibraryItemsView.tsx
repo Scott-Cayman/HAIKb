@@ -100,8 +100,8 @@ const ItemVisual = ({ item, listMode = false }: { item: CollectionItem; listMode
         iconBgFrom={item.iconBgFrom}
         iconBgTo={item.iconBgTo}
         iconColor={item.iconColor}
-        className={listMode ? 'h-10 w-10 rounded-2xl' : 'h-16 w-16 rounded-[20px]'}
-        iconClassName={listMode ? 'h-5 w-5' : 'h-8 w-8'}
+        className={listMode ? 'h-10 w-10 rounded-2xl' : 'h-14 w-14 rounded-[18px]'}
+        iconClassName={listMode ? 'h-5 w-5' : 'h-7 w-7'}
       />
     );
   }
@@ -118,16 +118,18 @@ const ItemVisual = ({ item, listMode = false }: { item: CollectionItem; listMode
   }
 
   return (
-    <div className="relative mb-4 overflow-hidden rounded-2xl bg-slate-50">
-      <div className="aspect-[4/3] w-full">
+    <div className="relative mb-3 h-[104px] overflow-hidden rounded-2xl">
+      <div className="h-full w-full">
         <FilePreviewThumbnail
           fileId={Number(item.id)}
           fileName={item.name}
           fileExt={item.fileExt || inferFileExt(item.name)}
           previewStatus={item.previewStatus}
+          thumbnailStatus={item.thumbnailStatus}
           className="flex h-full w-full items-center justify-center"
-          imageClassName="h-full w-full object-cover"
+          imageClassName="h-full w-full"
           fallbackClassName="h-10 w-10 text-slate-400"
+          smartFit
         />
       </div>
     </div>
@@ -205,19 +207,19 @@ const ItemActions = ({
 };
 
 const GridCard = ({ item }: { item: CollectionItem }) => {
-  const footerLeft = item.sizeLabel || item.statusLabel;
-  const footerRight = item.dateLabel || null;
+  const footerDate = item.dateLabel || null;
+  const footerSize = item.sizeLabel || null;
 
   return (
     <div
       onClick={item.onOpen}
-      className="group cursor-pointer rounded-[24px] border border-slate-100 bg-white p-4 transition-all hover:-translate-y-0.5 hover:border-[#d9ece8] hover:shadow-[0_16px_28px_rgba(178,200,220,0.18)]"
+      className="group cursor-pointer rounded-[20px] border border-slate-100 bg-white p-3 transition-all hover:-translate-y-px hover:border-[#d9ece8] hover:shadow-[0_7px_16px_rgba(178,200,220,0.1)]"
     >
       {item.kind === 'folder' ? (
-        <div className="relative mb-4 flex items-center justify-center rounded-2xl bg-slate-50 py-5">
+        <div className="relative mb-3 flex h-[104px] items-center justify-center rounded-[18px]">
           <ItemVisual item={item} />
           {item.favorite ? (
-            <div className="absolute right-3 top-3">
+            <div className="absolute right-2.5 top-2.5">
               <FavoriteButton
                 active={item.favorite.active}
                 title={item.favorite.title}
@@ -243,10 +245,10 @@ const GridCard = ({ item }: { item: CollectionItem }) => {
         </div>
       )}
 
-      <div className="space-y-2">
+      <div className="space-y-1">
         <div
-          className={`min-h-[44px] text-sm font-semibold leading-6 text-slate-800 transition-colors group-hover:text-[#34b8aa] ${
-            item.kind === 'folder' ? 'line-clamp-2 text-center' : 'line-clamp-2'
+          className={`text-sm font-semibold leading-6 text-slate-800 transition-colors group-hover:text-[#34b8aa] ${
+            item.kind === 'folder' ? 'truncate text-center' : 'min-h-[40px] line-clamp-2'
           }`}
           title={item.name}
         >
@@ -259,27 +261,16 @@ const GridCard = ({ item }: { item: CollectionItem }) => {
           </div>
         ) : null}
 
-        {item.statusLabel && item.kind === 'file' ? (
-          <div>
-            <span className={`inline-flex rounded px-2 py-1 text-xs ${getStatusClassName(item.statusTone)}`}>
-              {item.statusLabel}
-            </span>
-          </div>
-        ) : null}
-
-        {footerLeft || footerRight ? (
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>{footerLeft || ''}</span>
-            <span>{footerRight || ''}</span>
+        {footerDate || footerSize || item.action || item.menu ? (
+          <div className="mt-1.5 flex h-8 items-center gap-1 border-t border-slate-100/80 pt-1.5">
+            <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-1 overflow-hidden text-[9.5px] text-slate-400">
+              {footerDate ? <span className="truncate">{footerDate}</span> : <span />}
+              {footerSize ? <span className="shrink-0 whitespace-nowrap text-right">{footerSize}</span> : null}
+            </div>
+            {item.action || item.menu ? <ItemActions item={item} compact showFavorite={false} /> : null}
           </div>
         ) : null}
       </div>
-
-      {item.action || item.menu ? (
-        <div className="mt-4 flex items-center justify-end">
-          <ItemActions item={item} compact showFavorite={false} />
-        </div>
-      ) : null}
     </div>
   );
 };
@@ -364,7 +355,7 @@ const LibraryItemsView = ({
   emptyState,
   showHeader = true,
   className = '',
-  gridClassName = 'grid grid-cols-2 gap-4 p-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5',
+  gridClassName = 'grid gap-3 p-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,150px),1fr))] md:gap-4 md:p-5 md:[grid-template-columns:repeat(auto-fill,minmax(min(100%,180px),1fr))]',
   nameColumn = DEFAULT_NAME_COLUMN,
   secondaryColumn,
   sizeColumn,
@@ -440,9 +431,9 @@ const LibraryItemsView = ({
   );
 
   return (
-    <div className={`min-h-0 flex flex-col ${className}`}>
+    <div className={`min-h-0 min-w-0 flex flex-col overflow-hidden ${className}`}>
       {showHeader ? (
-        <div className="sticky top-0 z-20 shrink-0 flex items-center justify-between border-b border-slate-100 bg-white p-4">
+        <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-slate-100 bg-white p-3 md:p-4">
           <p className="text-sm text-slate-500">{itemCountLabel || `${items.length} 个项目`}</p>
           <div className="flex items-center space-x-1 rounded-lg bg-slate-100 p-1">
             <button
@@ -467,7 +458,7 @@ const LibraryItemsView = ({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">{content}</div>
+      <div className="min-h-0 flex-1 overflow-auto">{content}</div>
     </div>
   );
 };

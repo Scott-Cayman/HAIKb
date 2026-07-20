@@ -311,13 +311,8 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
         ]
         is_super_admin = final_email in super_admin_emails
         
-        # 检查是否是普通管理员
-        admin_emails = [
-            item.strip().lower()
-            for item in (settings.ADMIN_EMAILS or "").split(",")
-            if item.strip()
-        ]
-        is_admin = is_super_admin or final_email in admin_emails
+        # 普通管理员只能由超级管理员在后台任命；配置仅用于识别超级管理员。
+        is_admin = is_super_admin
         
         if not user:
             user = User(
@@ -356,9 +351,6 @@ def dingtalk_callback(request: DingTalkCallbackRequest, db: Session = Depends(ge
             # 如果是超级管理员邮箱，自动提升权限
             if is_super_admin:
                 user.is_super_admin = True
-                user.is_admin = True
-            elif is_admin:
-                # 如果是普通管理员但不是超级管理员，只设置 is_admin
                 user.is_admin = True
             db.commit()
             db.refresh(user)

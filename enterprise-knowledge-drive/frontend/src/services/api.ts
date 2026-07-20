@@ -30,7 +30,11 @@ const DEFAULT_CACHE_TTL = 30000; // 30秒缓存
 
 const getRequestKey = (config: AxiosRequestConfig): string => {
   const { method, url, params, data } = config;
-  return `${method}-${url}-${JSON.stringify(params || {})}-${JSON.stringify(data || {})}`;
+  // Folder/file responses are permission-scoped. Including the access token
+  // prevents one signed-in account from receiving another account's cached
+  // directory response after an in-app logout/login switch.
+  const authScope = localStorage.getItem('token') || 'anonymous';
+  return `${authScope}-${method}-${url}-${JSON.stringify(params || {})}-${JSON.stringify(data || {})}`;
 };
 
 const showLoading = () => {
@@ -62,6 +66,11 @@ const shouldCache = (config: AxiosRequestConfig): boolean => {
 
 const shouldRetry = (error: any, retryCount: number): boolean => {
   if (retryCount >= MAX_RETRIES) return false;
+  const method = String(error.config?.method || 'get').toUpperCase();
+  // Never replay mutations automatically. A timed-out DELETE/POST may already
+  // have committed on the server, and replaying it also keeps confirmation
+  // dialogs stuck in a misleading loading state.
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) return false;
   if (error.code && RETRYABLE_ERRORS.includes(error.code)) return true;
   if (error.response?.status && RETRYABLE_STATUS_CODES.includes(error.response.status)) return true;
   return false;
@@ -104,6 +113,10 @@ api.interceptors.response.use(
         hideLoading();
       }
     }
+    const method = String(response.config.method || 'get').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      responseCache.clear();
+    }
     return response;
   },
   async (error) => {
@@ -116,6 +129,7 @@ api.interceptors.response.use(
     }
     
     if (error.response?.status === 401) {
+      responseCache.clear();
       localStorage.removeItem('token');
       window.location.href = '/login';
     }

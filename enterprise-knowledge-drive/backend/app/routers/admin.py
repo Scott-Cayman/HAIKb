@@ -1,7 +1,9 @@
 import json
 from datetime import datetime, timedelta, timezone
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Any, Dict, Optional, List
@@ -15,6 +17,11 @@ from app.models.user_file_view import UserFileView
 from app.dependencies.auth import get_current_user, get_current_super_admin, get_current_admin
 from app.routers.auth import get_password_hash
 from app.services.preset_prompt_service import preset_prompt_service
+from app.services.dingtalk_directory import (
+    DingTalkDirectoryError,
+    get_directory_payload,
+    sync_dingtalk_directory,
+)
 
 router = APIRouter()
 HOME_APPEARANCE_SETTING_KEY = "home_appearance"
@@ -23,11 +30,17 @@ class UserCreate(BaseModel):
     name: str
     username: str
     password: str
+    department_id: Optional[str] = None
     department_name: Optional[str] = None
+    full_department_path: Optional[str] = None
+    root_department_name: Optional[str] = None
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
+    department_id: Optional[str] = None
     department_name: Optional[str] = None
+    full_department_path: Optional[str] = None
+    root_department_name: Optional[str] = None
     is_active: Optional[bool] = None
 
 class RoleUpdate(BaseModel):
@@ -116,6 +129,38 @@ def _load_json_setting(setting: Optional[SystemSetting]) -> Optional[Dict[str, A
         return None
     return parsed if isinstance(parsed, dict) else None
 
+
+def _sanitize_home_appearance(value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return only appearance values that the current Home page consumes."""
+    source = value if isinstance(value, dict) else {}
+
+    def pick_strings(section_name: str, allowed_keys: set[str]) -> Dict[str, str]:
+        section = source.get(section_name)
+        if not isinstance(section, dict):
+            return {}
+        return {
+            key: section[key]
+            for key in allowed_keys
+            if isinstance(section.get(key), str)
+        }
+
+    result: Dict[str, Any] = {
+        "searchBox": pick_strings("searchBox", {"bg", "border"}),
+        "aiButton": pick_strings("aiButton", {"from", "to", "text"}),
+        "keywordButton": pick_strings("keywordButton", {"bg", "text"}),
+    }
+
+    folder_card = source.get("folderCard")
+    badge = folder_card.get("badge") if isinstance(folder_card, dict) else None
+    result["folderCard"] = {
+        "badge": {
+            key: badge[key]
+            for key in {"bg", "text"}
+            if isinstance(badge, dict) and isinstance(badge.get(key), str)
+        }
+    }
+    return result
+
 @router.get("/dashboard")
 def get_dashboard(db: Session = Depends(get_db), current_admin: User = Depends(get_current_admin)):
     users_count = db.query(User).count()
@@ -136,7 +181,7 @@ def get_home_appearance_setting(
 ):
     setting = db.query(SystemSetting).filter(SystemSetting.key == HOME_APPEARANCE_SETTING_KEY).first()
     return HomeAppearanceSettingResponse(
-        value=_load_json_setting(setting),
+        value=_sanitize_home_appearance(_load_json_setting(setting)) if setting else None,
         updated_at=setting.updated_at if setting else None,
     )
 
@@ -147,24 +192,25 @@ def update_home_appearance_setting(
     db: Session = Depends(get_db),
     current_admin: User = Depends(get_current_admin),
 ):
-    serialized_value = json.dumps(payload.value, ensure_ascii=False)
+    sanitized_value = _sanitize_home_appearance(payload.value)
+    serialized_value = json.dumps(sanitized_value, ensure_ascii=False)
     setting = db.query(SystemSetting).filter(SystemSetting.key == HOME_APPEARANCE_SETTING_KEY).first()
 
     if setting is None:
         setting = SystemSetting(
             key=HOME_APPEARANCE_SETTING_KEY,
             value=serialized_value,
-            description="首页按钮、组件与封面外观配置",
+            description="首页检索区与置顶目录标签外观配置",
         )
         db.add(setting)
     else:
         setting.value = serialized_value
-        setting.description = "首页按钮、组件与封面外观配置"
+        setting.description = "首页检索区与置顶目录标签外观配置"
 
     db.commit()
     db.refresh(setting)
     return HomeAppearanceSettingResponse(
-        value=_load_json_setting(setting),
+        value=_sanitize_home_appearance(_load_json_setting(setting)),
         updated_at=setting.updated_at,
     )
 
@@ -227,8 +273,36 @@ def update_preset_prompt(
 
 @router.get("/users")
 def get_users(db: Session = Depends(get_db), current_admin: User = Depends(get_current_super_admin)):
-    users = db.query(User).all()
+    users = (
+        db.query(User)
+        .order_by(User.is_super_admin.desc(), User.is_admin.desc(), User.name.asc(), User.id.asc())
+        .all()
+    )
     return {"users": users}
+
+
+@router.get("/users/directory")
+def get_user_directory(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_super_admin),
+):
+    return get_directory_payload(db)
+
+
+@router.post("/users/sync-dingtalk")
+def sync_user_directory(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_super_admin),
+):
+    try:
+        result = sync_dingtalk_directory(db)
+    except DingTalkDirectoryError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="连接钉钉通讯录失败，请稍后重试") from exc
+    return {**result, **get_directory_payload(db)}
 
 @router.post("/users")
 def create_user(user_data: UserCreate, db: Session = Depends(get_db), current_admin: User = Depends(get_current_super_admin)):
@@ -244,7 +318,12 @@ def create_user(user_data: UserCreate, db: Session = Depends(get_db), current_ad
         name=user_data.name,
         username=user_data.username,
         hashed_password=hashed_password,
+        department_id=user_data.department_id,
         department_name=user_data.department_name,
+        department_paths=(json.dumps([user_data.full_department_path], ensure_ascii=False) if user_data.full_department_path else None),
+        full_department_path=user_data.full_department_path,
+        root_department_name=user_data.root_department_name,
+        department_manually_overridden=bool(user_data.department_id or user_data.full_department_path),
         is_active=True
     )
     
@@ -262,8 +341,18 @@ def update_user(user_id: int, user_data: UserUpdate, db: Session = Depends(get_d
     
     if user_data.name is not None:
         user.name = user_data.name
-    if user_data.department_name is not None:
+    department_fields = {"department_id", "department_name", "full_department_path", "root_department_name"}
+    if department_fields.intersection(user_data.__fields_set__):
+        user.department_id = user_data.department_id
         user.department_name = user_data.department_name
+        user.full_department_path = user_data.full_department_path
+        user.root_department_name = user_data.root_department_name
+        user.department_paths = (
+            json.dumps([user_data.full_department_path], ensure_ascii=False)
+            if user_data.full_department_path
+            else None
+        )
+        user.department_manually_overridden = True
     if user_data.is_active is not None:
         user.is_active = user_data.is_active
     
@@ -300,31 +389,49 @@ def delete_user(user_id: int, db: Session = Depends(get_db), current_admin: User
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     
-    # 强制删除：先删除所有关联数据
+    # Keep content owned by the account, but remove account-only activity rows.
+    # A short lock timeout prevents an admin request from spinning forever when
+    # another transaction is holding one of these rows.
     from app.models import (
         AgentMessage,
         Favorite,
         AuditLog,
     )
-    
-    # 删除关联的 agent 消息
-    db.query(AgentMessage).filter(AgentMessage.user_id == user_id).delete()
-    
-    # 删除收藏
-    db.query(Favorite).filter(Favorite.user_id == user_id).delete()
-    
-    # 删除审计日志
-    db.query(AuditLog).filter(AuditLog.user_id == user_id).delete()
-    
-    # 对于文件夹和文件，将 created_by/uploaded_by 设置为 null
-    from app.models import Folder, File
-    db.query(Folder).filter(Folder.created_by == user_id).update({"created_by": None})
-    db.query(File).filter(File.uploaded_by == user_id).update({"uploaded_by": None})
-    
-    # 最后删除用户
-    db.delete(user)
-    db.commit()
-    
+    from app.models.resource_permission import ResourcePermission
+
+    try:
+        db.execute(text("SET LOCAL lock_timeout = '5s'"))
+        db.execute(text("SET LOCAL statement_timeout = '15s'"))
+
+        db.query(AgentMessage).filter(AgentMessage.user_id == user_id).delete(synchronize_session=False)
+        db.query(Favorite).filter(Favorite.user_id == user_id).delete(synchronize_session=False)
+        # Preserve the immutable operation trail after an account is removed.
+        # The actor id becomes null while action, target, time, IP and details remain.
+        db.query(AuditLog).filter(AuditLog.user_id == user_id).update(
+            {AuditLog.user_id: None}, synchronize_session=False
+        )
+        db.query(UserFileView).filter(UserFileView.user_id == user_id).delete(synchronize_session=False)
+
+        # Ownership/audit metadata must not delete shared company content.
+        db.query(Folder).filter(Folder.created_by == user_id).update(
+            {Folder.created_by: None}, synchronize_session=False
+        )
+        db.query(File).filter(File.uploaded_by == user_id).update(
+            {File.uploaded_by: None}, synchronize_session=False
+        )
+        db.query(ResourcePermission).filter(ResourcePermission.created_by == user_id).update(
+            {ResourcePermission.created_by: None}, synchronize_session=False
+        )
+
+        db.delete(user)
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="用户删除失败：仍有数据被占用，请稍后重试",
+        ) from exc
+
     return {"message": "User deleted"}
 
 

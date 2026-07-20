@@ -3,6 +3,7 @@ import {
   BookOpen,
   Box,
   Briefcase,
+  Folder,
   FolderKanban,
   GraduationCap,
   Lightbulb,
@@ -36,6 +37,7 @@ export type FolderIconOption = {
 };
 
 export const folderIconOptions: FolderIconOption[] = [
+  { key: 'folder', label: '云盘文件夹', icon: Folder },
   { key: 'book-open', label: '学习资料', icon: BookOpen },
   { key: 'graduation-cap', label: '培训成长', icon: GraduationCap },
   { key: 'briefcase', label: '业务资料', icon: Briefcase },
@@ -51,12 +53,12 @@ export const folderIconOptions: FolderIconOption[] = [
 const iconMap = new Map(folderIconOptions.map((item) => [item.key, item.icon]));
 
 export const getFolderIconComponent = (iconKey?: string | null): LucideIcon =>
-  iconMap.get(iconKey || '') || BookOpen;
+  iconMap.get(iconKey || '') || Folder;
 
 export const getFolderVisualConfig = (folder?: FolderVisualConfig | null) => ({
   displayMode: (folder?.display_mode || 'icon') as FolderDisplayMode,
   coverUrl: folder?.cover_url || '',
-  iconKey: folder?.icon_key || 'book-open',
+  iconKey: folder?.icon_key || 'folder',
   iconBgFrom: folder?.icon_bg_from || '#8cf3d5',
   iconBgTo: folder?.icon_bg_to || '#44d7cc',
   iconColor: folder?.icon_color || '#ffffff',

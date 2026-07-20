@@ -3,7 +3,7 @@ import api from './api';
 export interface PresetPromptItem {
   id: string;
   name: string;
-  scope_type: 'global' | 'department';
+  scope_type: 'system' | 'global' | 'department';
   department_name?: string | null;
   relative_path: string;
   description?: string | null;

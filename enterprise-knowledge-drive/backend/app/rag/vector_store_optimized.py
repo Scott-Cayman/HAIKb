@@ -121,9 +121,15 @@ class CachedVectorStoreAdapter:
         if not filters:
             return True
 
-        allowed_file_ids = filters.get("file_ids") or filters.get("allowed_file_ids")
-        if allowed_file_ids and metadata.get("file_id") not in allowed_file_ids:
-            return False
+        file_filter_supplied = "file_ids" in filters or "allowed_file_ids" in filters
+        allowed_file_ids = filters.get("file_ids")
+        if allowed_file_ids is None:
+            allowed_file_ids = filters.get("allowed_file_ids")
+        if file_filter_supplied:
+            if not allowed_file_ids:
+                return False
+            if metadata.get("file_id") not in allowed_file_ids:
+                return False
 
         summary_ids = filters.get("summary_ids")
         if summary_ids and metadata.get("summary_id") not in summary_ids:
@@ -168,4 +174,3 @@ class CachedVectorStoreAdapter:
 class VectorStoreAdapter(CachedVectorStoreAdapter):
     """向后兼容的名称，使用缓存版。"""
     pass
-

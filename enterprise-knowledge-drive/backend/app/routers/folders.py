@@ -1,13 +1,14 @@
 import json
+import io
 import os
-import shutil
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File as FastAPIFile, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File as FastAPIFile, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 from datetime import datetime
 from pydantic import BaseModel, Field
+from PIL import Image, UnidentifiedImageError
 from app.config import settings
 from app.database import get_db
 from app.models.document_summary import DocumentSummary
@@ -15,24 +16,77 @@ from app.models.folder import Folder
 from app.models.folder_summary import FolderSummary
 from app.models.file import File
 from app.models.permission import FolderPermission
+from app.models.resource_permission import ResourcePermission
 from app.models.setting import SystemSetting
 from app.models.user import User
 from app.dependencies.auth import get_current_user
 from app.rag.index_manager import index_manager
 from app.services.folder_access import (
     FOLDER_MANAGER_PERMISSION_TYPE,
-    can_manage_folder_settings,
-    can_view_folder,
     get_folder_manager_user_ids,
     get_user_specific_department,
     is_folder_manager,
     list_folder_manager_candidates,
     normalize_manager_user_ids,
+    user_belongs_to_department,
 )
+from app.services.resource_access import (
+    CAPABILITY_DELETE,
+    CAPABILITY_DOWNLOAD,
+    CAPABILITY_EDIT,
+    CAPABILITY_UPLOAD,
+    CAPABILITY_VIEW,
+    LEGACY_SUBJECT_TYPE_DEPARTMENT,
+    RESOURCE_TYPE_FOLDER,
+    SUBJECT_TYPE_ALL,
+    SUBJECT_TYPE_ORG,
+    SUBJECT_TYPE_USER,
+    get_folder_capabilities,
+    list_visible_folders,
+)
+from app.services.audit_log_service import record_audit_log
 from app.services.folder_summary_service import folder_summary_service
+from app.services.upload_folder_service import (
+    ensure_upload_folder_parts,
+    normalize_upload_folder_parts,
+)
 
 router = APIRouter()
 HOME_PINNED_FOLDERS_SETTING_PREFIX = "home_pinned_folders:"
+MAX_FOLDER_COVER_BYTES = 5 * 1024 * 1024
+MAX_FOLDER_COVER_PIXELS = 40_000_000
+FOLDER_COVER_EXTENSIONS = {
+    "JPEG": ".jpg",
+    "PNG": ".png",
+    "WEBP": ".webp",
+    "GIF": ".gif",
+}
+
+
+def _normalize_folder_name(value: str) -> str:
+    name = (value or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="文件夹名称不能为空")
+    if name in {".", ".."} or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="文件夹名称不能包含路径分隔符")
+    return name
+
+
+def _ensure_unique_folder_name(
+    db: Session,
+    name: str,
+    parent_id: Optional[int],
+    exclude_folder_id: Optional[int] = None,
+) -> None:
+    query = db.query(Folder.id).filter(
+        Folder.name == name,
+        Folder.parent_id == parent_id,
+        Folder.is_deleted == False,
+    )
+    if exclude_folder_id is not None:
+        query = query.filter(Folder.id != exclude_folder_id)
+    if query.first():
+        raise HTTPException(status_code=409, detail="当前目录已存在同名文件夹")
 
 class FolderCreate(BaseModel):
     name: str
@@ -75,6 +129,7 @@ class FolderResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     can_manage_settings: bool = False
+    capabilities: Dict[str, bool] = Field(default_factory=dict)
     
     class Config:
         from_attributes = True
@@ -93,10 +148,30 @@ class FolderPermissionContextResponse(BaseModel):
     can_manage_settings: bool
 
 
+class ResourcePermissionRulePayload(BaseModel):
+    subject_type: str
+    subject_value: Optional[str] = None
+
+
+class ResourcePermissionRuleResponse(BaseModel):
+    capability: str
+    subject_type: str
+    subject_value: Optional[str] = None
+
+
+class PermissionInheritanceSource(BaseModel):
+    folder_id: int
+    folder_name: str
+
+
 class FolderSettingsResponse(BaseModel):
     folder: FolderResponse
     manager_users: List[FolderPermissionUserResponse] = Field(default_factory=list)
     candidate_users: List[FolderPermissionUserResponse] = Field(default_factory=list)
+    available_org_units: List[str] = Field(default_factory=list)
+    permission_rules: List[ResourcePermissionRuleResponse] = Field(default_factory=list)
+    effective_permission_rules: List[ResourcePermissionRuleResponse] = Field(default_factory=list)
+    permission_inheritance: Dict[str, Optional[PermissionInheritanceSource]] = Field(default_factory=dict)
     permission_context: FolderPermissionContextResponse
 
 
@@ -114,6 +189,11 @@ class FolderSettingsUpdate(BaseModel):
     card_bg_to: Optional[str] = None
     card_glow_color: Optional[str] = None
     manager_user_ids: List[int] = Field(default_factory=list)
+    view_rules: List[ResourcePermissionRulePayload] = Field(default_factory=list)
+    download_rules: List[ResourcePermissionRulePayload] = Field(default_factory=list)
+    edit_rules: List[ResourcePermissionRulePayload] = Field(default_factory=list)
+    upload_rules: List[ResourcePermissionRulePayload] = Field(default_factory=list)
+    delete_rules: List[ResourcePermissionRulePayload] = Field(default_factory=list)
 
 
 class FolderSummaryResponse(BaseModel):
@@ -125,6 +205,7 @@ class FolderSummaryResponse(BaseModel):
 
 
 class HomeFolderContextResponse(BaseModel):
+    root_folders: List[FolderResponse] = Field(default_factory=list)
     enterprise_root: FolderResponse
     center_folder: FolderResponse
     pinned_folders: List[FolderResponse] = Field(default_factory=list)
@@ -133,6 +214,17 @@ class HomeFolderContextResponse(BaseModel):
 
 class HomePinnedFoldersUpdate(BaseModel):
     folder_ids: List[int] = Field(default_factory=list)
+
+
+class EnsureUploadFolderPathsPayload(BaseModel):
+    parent_id: int
+    paths: List[str] = Field(default_factory=list)
+
+
+class EnsureUploadFolderPathsResponse(BaseModel):
+    created_folder_ids: List[int] = Field(default_factory=list)
+    reused_folder_ids: List[int] = Field(default_factory=list)
+    folder_ids_by_path: Dict[str, int] = Field(default_factory=dict)
 
 
 def _collect_descendant_folder_ids(db: Session, root_folder_id: int) -> List[int]:
@@ -157,6 +249,7 @@ def _collect_descendant_folder_ids(db: Session, root_folder_id: int) -> List[int
 
 
 def _serialize_folder(folder: Folder, db: Session, current_user: User) -> FolderResponse:
+    capabilities = get_folder_capabilities(db, folder, current_user)
     return FolderResponse(
         id=folder.id,
         name=folder.name,
@@ -177,7 +270,8 @@ def _serialize_folder(folder: Folder, db: Session, current_user: User) -> Folder
         is_deleted=folder.is_deleted,
         created_at=folder.created_at,
         updated_at=folder.updated_at,
-        can_manage_settings=can_manage_folder_settings(db, folder, current_user),
+        can_manage_settings=capabilities.can_manage_settings,
+        capabilities=capabilities.to_dict(),
     )
 
 
@@ -189,6 +283,160 @@ def _serialize_user(user: User) -> FolderPermissionUserResponse:
     )
 
 
+def _collect_available_org_units(db: Session) -> List[str]:
+    directory_setting = db.query(SystemSetting).filter(SystemSetting.key == "dingtalk_directory_tree").first()
+    if directory_setting:
+        try:
+            payload = json.loads(directory_setting.value)
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+        units = set()
+        for item in payload.get("departments", []) if isinstance(payload, dict) else []:
+            if not isinstance(item, dict) or item.get("parent_id") is None:
+                continue
+            scope_path = (item.get("scope_path") or "").strip()
+            if not scope_path:
+                full_path = (item.get("path") or "").strip()
+                scope_path = full_path.split("/", 1)[1] if "/" in full_path else (item.get("name") or "").strip()
+            if scope_path:
+                units.add(scope_path)
+        if units:
+            return sorted(units)
+
+    rows = (
+        db.query(User.full_department_path)
+        .filter(User.is_active == True, User.full_department_path != None)
+        .all()
+    )
+    units: Set[str] = set()
+    for row in rows:
+        path_value = row[0] or ""
+        parts = [part.strip() for part in path_value.split("/") if part.strip()]
+        prefix: List[str] = []
+        for part in parts:
+            prefix.append(part)
+            units.add("/".join(prefix))
+            units.add(part)
+    return sorted(units)
+
+
+def _normalize_permission_rules(
+    rules: List[ResourcePermissionRulePayload],
+    capability: str,
+) -> List[ResourcePermission]:
+    normalized_rules: List[ResourcePermission] = []
+    seen: Set[tuple[str, Optional[str]]] = set()
+    for rule in rules:
+        subject_type = (rule.subject_type or "").strip()
+        subject_value = rule.subject_value.strip() if rule.subject_value else None
+        if subject_type not in {SUBJECT_TYPE_ALL, SUBJECT_TYPE_ORG, SUBJECT_TYPE_USER}:
+            raise HTTPException(status_code=400, detail="包含不支持的权限主体类型")
+        if subject_type == SUBJECT_TYPE_ALL:
+            subject_value = None
+        elif not subject_value:
+            raise HTTPException(status_code=400, detail="权限主体缺少 subject_value")
+        dedupe_key = (subject_type, subject_value)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized_rules.append(
+            ResourcePermission(
+                resource_type=RESOURCE_TYPE_FOLDER,
+                resource_id=0,
+                action=capability,
+                capability=capability,
+                subject_type=subject_type,
+                subject_value=subject_value,
+                inherit_to_children=True,
+            )
+        )
+    return normalized_rules
+
+
+def _load_folder_permission_rules(db: Session, folder_id: int) -> List[ResourcePermissionRuleResponse]:
+    rows = (
+        db.query(ResourcePermission)
+        .filter(
+            ResourcePermission.resource_type == RESOURCE_TYPE_FOLDER,
+            ResourcePermission.resource_id == folder_id,
+        )
+        .order_by(ResourcePermission.capability.asc(), ResourcePermission.subject_type.asc(), ResourcePermission.id.asc())
+        .all()
+    )
+    return [
+        ResourcePermissionRuleResponse(
+            capability=row.capability,
+            subject_type=(
+                SUBJECT_TYPE_ORG
+                if row.subject_type == LEGACY_SUBJECT_TYPE_DEPARTMENT
+                else row.subject_type
+            ),
+            subject_value=row.subject_value,
+        )
+        for row in rows
+    ]
+
+
+def _load_effective_folder_permission_rules(
+    db: Session,
+    folder: Folder,
+) -> tuple[List[ResourcePermissionRuleResponse], Dict[str, Optional[PermissionInheritanceSource]]]:
+    effective: List[ResourcePermissionRuleResponse] = []
+    inheritance: Dict[str, Optional[PermissionInheritanceSource]] = {}
+    ancestors = list(reversed(_collect_folder_ancestors(db, folder)))
+
+    for capability in (
+        CAPABILITY_VIEW,
+        CAPABILITY_DOWNLOAD,
+        CAPABILITY_EDIT,
+        CAPABILITY_UPLOAD,
+        CAPABILITY_DELETE,
+    ):
+        source_folder: Optional[Folder] = None
+        rows = (
+            db.query(ResourcePermission)
+            .filter(
+                ResourcePermission.resource_type == RESOURCE_TYPE_FOLDER,
+                ResourcePermission.resource_id == folder.id,
+                ResourcePermission.capability == capability,
+            )
+            .all()
+        )
+        if rows:
+            source_folder = folder
+        else:
+            for ancestor in ancestors:
+                rows = (
+                    db.query(ResourcePermission)
+                    .filter(
+                        ResourcePermission.resource_type == RESOURCE_TYPE_FOLDER,
+                        ResourcePermission.resource_id == ancestor.id,
+                        ResourcePermission.capability == capability,
+                        ResourcePermission.inherit_to_children == True,
+                    )
+                    .all()
+                )
+                if rows:
+                    source_folder = ancestor
+                    break
+
+        inheritance[capability] = (
+            None
+            if source_folder is None or source_folder.id == folder.id
+            else PermissionInheritanceSource(folder_id=source_folder.id, folder_name=source_folder.name)
+        )
+        for row in rows:
+            effective.append(
+                ResourcePermissionRuleResponse(
+                    capability=row.capability,
+                    subject_type=(SUBJECT_TYPE_ORG if row.subject_type == LEGACY_SUBJECT_TYPE_DEPARTMENT else row.subject_type),
+                    subject_value=row.subject_value,
+                )
+            )
+
+    return effective, inheritance
+
+
 def _get_visible_root_folders(db: Session, current_user: User) -> List[Folder]:
     folders = (
         db.query(Folder)
@@ -196,12 +444,32 @@ def _get_visible_root_folders(db: Session, current_user: User) -> List[Folder]:
         .order_by(Folder.sort_order.asc(), Folder.id.asc())
         .all()
     )
-    return [folder for folder in folders if can_view_folder(db, folder, current_user)]
+    return list_visible_folders(db, folders, current_user)
 
 
 def _select_home_center_folder(db: Session, current_user: User, visible_root_folders: List[Folder]) -> Optional[Folder]:
     if not visible_root_folders:
         return None
+
+    # Department centers live directly below the enterprise root. Select a
+    # visible department center before considering stand-alone root folders;
+    # otherwise stale department metadata on a shared root (for example the
+    # company policy library) can send the user to the wrong home directory.
+    direct_children = (
+        db.query(Folder)
+        .filter(
+            Folder.parent_id.in_([folder.id for folder in visible_root_folders]),
+            Folder.is_deleted == False,
+        )
+        .order_by(Folder.sort_order.asc(), Folder.id.asc())
+        .all()
+    )
+    visible_children = list_visible_folders(db, direct_children, current_user)
+    for folder in visible_children:
+        if user_belongs_to_department(current_user, folder.department_name):
+            return folder
+    if len(visible_children) == 1:
+        return visible_children[0]
 
     user_department = get_user_specific_department(current_user)
     for folder in visible_root_folders:
@@ -216,13 +484,55 @@ def _select_home_center_folder(db: Session, current_user: User, visible_root_fol
 
 
 def _get_home_pin_candidates(db: Session, center_folder: Folder, current_user: User) -> List[Folder]:
+    ancestors = _collect_folder_ancestors(db, center_folder)
+    if len(ancestors) > 1:
+        return []
     folders = (
         db.query(Folder)
         .filter(Folder.parent_id == center_folder.id, Folder.is_deleted == False)
         .order_by(Folder.sort_order.asc(), Folder.id.asc())
         .all()
     )
-    return [folder for folder in folders if can_view_folder(db, folder, current_user)]
+    return list_visible_folders(db, folders, current_user)
+
+
+def _collect_folder_ancestors(db: Session, folder: Folder) -> List[Folder]:
+    ancestors: List[Folder] = []
+    current_parent_id = folder.parent_id
+    visited: Set[int] = set()
+
+    while current_parent_id and current_parent_id not in visited:
+        visited.add(current_parent_id)
+        parent_folder = (
+            db.query(Folder)
+            .filter(Folder.id == current_parent_id, Folder.is_deleted == False)
+            .first()
+        )
+        if not parent_folder:
+            break
+        ancestors.append(parent_folder)
+        current_parent_id = parent_folder.parent_id
+
+    ancestors.reverse()
+    return ancestors
+
+
+def _is_home_pin_scope_folder(db: Session, folder: Folder) -> bool:
+    return len(_collect_folder_ancestors(db, folder)) <= 1
+
+
+def _resolve_home_pin_scope_folder(db: Session, folder: Folder) -> Folder:
+    ancestors = _collect_folder_ancestors(db, folder)
+    if len(ancestors) <= 1:
+        return folder
+    return ancestors[1]
+
+
+def _resolve_enterprise_root_folder(db: Session, folder: Folder) -> Folder:
+    ancestors = _collect_folder_ancestors(db, folder)
+    if not ancestors:
+        return folder
+    return ancestors[0]
 
 
 def _load_home_pinned_folder_ids(db: Session, center_folder_id: int) -> List[int]:
@@ -277,26 +587,40 @@ def _build_home_folder_context(
     db: Session,
     current_user: User,
     center_folder: Optional[Folder] = None,
+    root_folder_id: Optional[int] = None,
 ) -> HomeFolderContextResponse:
     visible_root_folders = _get_visible_root_folders(db, current_user)
-    selected_center_folder = center_folder or _select_home_center_folder(db, current_user, visible_root_folders)
+    if center_folder is not None:
+        selected_center_folder = center_folder
+    elif root_folder_id is not None:
+        selected_center_folder = next((folder for folder in visible_root_folders if folder.id == root_folder_id), None)
+        if selected_center_folder is None:
+            raise HTTPException(status_code=404, detail="未找到可访问的根目录")
+    else:
+        selected_center_folder = _select_home_center_folder(db, current_user, visible_root_folders)
     if not selected_center_folder:
         raise HTTPException(status_code=404, detail="未找到当前用户可访问的首页中心目录")
+
+    # The pin scope is always the enterprise root or its direct child. Deeper
+    # folders inherit the direct center's pinned configuration.
+    selected_center_folder = _resolve_home_pin_scope_folder(db, selected_center_folder)
 
     pin_candidates = _get_home_pin_candidates(db, selected_center_folder, current_user)
     pin_candidate_map = {folder.id: folder for folder in pin_candidates}
     pinned_folder_ids = _load_home_pinned_folder_ids(db, selected_center_folder.id)
+    if selected_center_folder.parent_id is None and not pinned_folder_ids:
+        pinned_folder_ids = [folder.id for folder in pin_candidates]
     pinned_folders = [
         pin_candidate_map[folder_id]
         for folder_id in pinned_folder_ids
         if folder_id in pin_candidate_map
     ]
 
-    if not pinned_folders:
-        pinned_folders = pin_candidates[:6]
+    enterprise_root_folder = _resolve_enterprise_root_folder(db, selected_center_folder)
 
     return HomeFolderContextResponse(
-        enterprise_root=_serialize_folder(selected_center_folder, db, current_user),
+        root_folders=[_serialize_folder(folder, db, current_user) for folder in visible_root_folders],
+        enterprise_root=_serialize_folder(enterprise_root_folder, db, current_user),
         center_folder=_serialize_folder(selected_center_folder, db, current_user),
         pinned_folders=[_serialize_folder(folder, db, current_user) for folder in pinned_folders],
         pin_candidate_folders=[_serialize_folder(folder, db, current_user) for folder in pin_candidates],
@@ -315,24 +639,30 @@ def get_folders(parent_id: Optional[int] = None, db: Session = Depends(get_db), 
     return [
         _serialize_folder(folder, db, current_user)
         for folder in folders
-        if can_view_folder(db, folder, current_user)
+        if get_folder_capabilities(db, folder, current_user).can_view
     ]
 
 @router.post("", response_model=FolderResponse)
 def create_folder(
     folder: FolderCreate,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Basic permission check: only admins can create root folders, or everyone can?
-    # For MVP, let's allow everyone to create folders, or restrict as needed.
-    
-    # Check if parent folder is a second-level folder (has its own parent)
+    folder_name = _normalize_folder_name(folder.name)
+    parent_folder: Optional[Folder] = None
+
     if folder.parent_id is not None:
         parent_folder = db.query(Folder).filter(Folder.id == folder.parent_id, Folder.is_deleted == False).first()
-        if parent_folder and parent_folder.parent_id is not None:
-            raise HTTPException(status_code=400, detail="Cannot create subfolder in a second-level folder")
+        if not parent_folder:
+            raise HTTPException(status_code=404, detail="父文件夹不存在")
+        if not get_folder_capabilities(db, parent_folder, current_user).can_upload:
+            raise HTTPException(status_code=403, detail="您没有在此目录中新建文件夹的权限")
+    elif not current_user.is_super_admin:
+        raise HTTPException(status_code=403, detail="只有超级管理员可以新建根目录")
+
+    _ensure_unique_folder_name(db, folder_name, folder.parent_id)
     
     # 确定部门信息：
     # 如果是根文件夹（parent_id为None），使用当前用户的具体部门信息
@@ -350,11 +680,11 @@ def create_folder(
             is_super_admin_created = parent_folder.is_super_admin_created
     
     db_folder = Folder(
-        name=folder.name,
+        name=folder_name,
         parent_id=folder.parent_id,
         description=folder.description,
         display_mode="icon",
-        icon_key="book-open",
+        icon_key="folder",
         icon_bg_from="#8cf3d5",
         icon_bg_to="#44d7cc",
         icon_color="#ffffff",
@@ -367,6 +697,16 @@ def create_folder(
         is_super_admin_created=is_super_admin_created
     )
     db.add(db_folder)
+    db.flush()
+    record_audit_log(
+        db,
+        current_user,
+        "folder.create",
+        "folder",
+        db_folder.id,
+        request=request,
+        detail={"name": db_folder.name, "parent_id": db_folder.parent_id},
+    )
     db.commit()
     db.refresh(db_folder)
     
@@ -380,12 +720,82 @@ def create_folder(
     return _serialize_folder(db_folder, db, current_user)
 
 
-@router.get("/home-context", response_model=HomeFolderContextResponse)
-def get_home_folder_context(
+@router.post("/ensure-upload-paths", response_model=EnsureUploadFolderPathsResponse)
+def ensure_upload_folder_paths(
+    payload: EnsureUploadFolderPathsPayload,
+    background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return _build_home_folder_context(db, current_user)
+    if len(payload.paths) > 1000:
+        raise HTTPException(status_code=400, detail="单次最多创建 1000 个上传目录")
+
+    normalized_paths: Dict[str, List[str]] = {}
+    for path in payload.paths:
+        folder_parts = normalize_upload_folder_parts(path, includes_filename=False)
+        if folder_parts:
+            normalized_path = "/".join(folder_parts)
+            normalized_paths[normalized_path] = folder_parts
+
+    ordered_paths = sorted(
+        normalized_paths.items(),
+        key=lambda item: (len(item[1]), item[0]),
+    )
+    created_folder_ids: Set[int] = set()
+    reused_folder_ids: Set[int] = set()
+    folder_ids_by_path: Dict[str, int] = {}
+
+    try:
+        for normalized_path, folder_parts in ordered_paths:
+            result = ensure_upload_folder_parts(
+                folder_parts,
+                payload.parent_id,
+                db,
+                current_user,
+                request=request,
+                audit_source="folder_upload",
+            )
+            created_folder_ids.update(result.created_folder_ids)
+            reused_folder_ids.update(result.reused_folder_ids)
+            if result.folder_id is not None:
+                folder_ids_by_path[normalized_path] = result.folder_id
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    if created_folder_ids:
+        background_tasks.add_task(folder_summary_service.update_folder_summary, payload.parent_id)
+
+    return EnsureUploadFolderPathsResponse(
+        created_folder_ids=sorted(created_folder_ids),
+        reused_folder_ids=sorted(reused_folder_ids - created_folder_ids),
+        folder_ids_by_path=folder_ids_by_path,
+    )
+
+
+@router.get("/home-context", response_model=HomeFolderContextResponse)
+def get_home_folder_context(
+    root_folder_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _build_home_folder_context(db, current_user, root_folder_id=root_folder_id)
+
+
+@router.get("/{folder_id}/home-pinned-folders-context", response_model=HomeFolderContextResponse)
+def get_folder_home_pinned_context(
+    folder_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    if not get_folder_capabilities(db, folder, current_user).can_view:
+        raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
+    return _build_home_folder_context(db, current_user, center_folder=folder)
 
 
 @router.put("/{folder_id}/home-pinned-folders", response_model=HomeFolderContextResponse)
@@ -398,7 +808,9 @@ def update_home_pinned_folders(
     center_folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not center_folder:
         raise HTTPException(status_code=404, detail="Folder not found")
-    if not can_manage_folder_settings(db, center_folder, current_user):
+    if not _is_home_pin_scope_folder(db, center_folder):
+        raise HTTPException(status_code=400, detail="Only enterprise root and first-level folders can configure pinned folders")
+    if not get_folder_capabilities(db, center_folder, current_user).can_manage_settings:
         raise HTTPException(status_code=403, detail="You don't have permission to manage this folder")
 
     pin_candidates = _get_home_pin_candidates(db, center_folder, current_user)
@@ -415,7 +827,7 @@ def get_folder(folder_id: int, db: Session = Depends(get_db), current_user: User
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     # 权限检查
-    if not can_view_folder(db, folder, current_user):
+    if not get_folder_capabilities(db, folder, current_user).can_view:
         raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
     return _serialize_folder(folder, db, current_user)
 
@@ -426,7 +838,7 @@ def get_folder_summary(folder_id: int, db: Session = Depends(get_db), current_us
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     # 权限检查
-    if not can_view_folder(db, folder, current_user):
+    if not get_folder_capabilities(db, folder, current_user).can_view:
         raise HTTPException(status_code=403, detail="You don't have permission to access this folder")
 
     summary = (
@@ -451,7 +863,7 @@ def get_folder_settings(folder_id: int, db: Session = Depends(get_db), current_u
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
-    if not can_manage_folder_settings(db, folder, current_user):
+    if not get_folder_capabilities(db, folder, current_user).can_manage_settings:
         raise HTTPException(status_code=403, detail="You don't have permission to manage this folder")
 
     manager_user_ids = get_folder_manager_user_ids(db, folder.id)
@@ -464,11 +876,17 @@ def get_folder_settings(folder_id: int, db: Session = Depends(get_db), current_u
         else []
     )
     candidate_users = list_folder_manager_candidates(db, folder, current_user)
+    available_org_units = _collect_available_org_units(db)
+    effective_rules, permission_inheritance = _load_effective_folder_permission_rules(db, folder)
 
     return FolderSettingsResponse(
         folder=_serialize_folder(folder, db, current_user),
         manager_users=[_serialize_user(user) for user in manager_users],
         candidate_users=[_serialize_user(user) for user in candidate_users],
+        available_org_units=available_org_units,
+        permission_rules=_load_folder_permission_rules(db, folder.id),
+        effective_permission_rules=effective_rules,
+        permission_inheritance=permission_inheritance,
         permission_context=FolderPermissionContextResponse(
             is_super_admin=current_user.is_super_admin,
             is_creator=bool(folder.created_by and folder.created_by == current_user.id),
@@ -482,18 +900,18 @@ def get_folder_settings(folder_id: int, db: Session = Depends(get_db), current_u
 def update_folder_settings(
     folder_id: int,
     payload: FolderSettingsUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
-    if not can_manage_folder_settings(db, folder, current_user):
+    if not get_folder_capabilities(db, folder, current_user).can_manage_settings:
         raise HTTPException(status_code=403, detail="You don't have permission to manage this folder")
 
-    next_name = payload.name.strip()
-    if not next_name:
-        raise HTTPException(status_code=400, detail="name required")
+    next_name = _normalize_folder_name(payload.name)
+    _ensure_unique_folder_name(db, next_name, folder.parent_id, exclude_folder_id=folder.id)
 
     candidate_users = list_folder_manager_candidates(db, folder, current_user)
     candidate_user_ids = {user.id for user in candidate_users}
@@ -501,6 +919,21 @@ def update_folder_settings(
     invalid_user_ids = [user_id for user_id in next_manager_ids if user_id not in candidate_user_ids]
     if invalid_user_ids:
         raise HTTPException(status_code=400, detail="包含不可分配的文件夹管理者")
+
+    for rule in (
+        payload.view_rules
+        + payload.download_rules
+        + payload.edit_rules
+        + payload.upload_rules
+        + payload.delete_rules
+    ):
+        if (rule.subject_type or "").strip() == SUBJECT_TYPE_USER:
+            try:
+                subject_user_id = int(rule.subject_value or "0")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="用户权限规则格式不正确") from exc
+            if subject_user_id not in candidate_user_ids:
+                raise HTTPException(status_code=400, detail="包含不可分配的用户权限对象")
 
     folder.name = next_name
     folder.description = payload.description.strip() if payload.description else None
@@ -529,6 +962,38 @@ def update_folder_settings(
             )
         )
 
+    db.query(ResourcePermission).filter(
+        ResourcePermission.resource_type == RESOURCE_TYPE_FOLDER,
+        ResourcePermission.resource_id == folder.id,
+    ).delete(synchronize_session=False)
+
+    permission_rules = (
+        _normalize_permission_rules(payload.view_rules, CAPABILITY_VIEW)
+        + _normalize_permission_rules(payload.download_rules, CAPABILITY_DOWNLOAD)
+        + _normalize_permission_rules(payload.edit_rules, CAPABILITY_EDIT)
+        + _normalize_permission_rules(payload.upload_rules, CAPABILITY_UPLOAD)
+        + _normalize_permission_rules(payload.delete_rules, CAPABILITY_DELETE)
+    )
+    for rule in permission_rules:
+        rule.resource_id = folder.id
+        rule.created_by = current_user.id
+        db.add(rule)
+
+    record_audit_log(
+        db,
+        current_user,
+        "folder.permissions.update",
+        "folder",
+        folder.id,
+        request=request,
+        detail={
+            "view_rules": len(payload.view_rules),
+            "download_rules": len(payload.download_rules),
+            "edit_rules": len(payload.edit_rules),
+            "upload_rules": len(payload.upload_rules),
+            "delete_rules": len(payload.delete_rules),
+        },
+    )
     db.commit()
     db.refresh(folder)
     return get_folder_settings(folder_id=folder.id, db=db, current_user=current_user)
@@ -544,21 +1009,34 @@ async def upload_folder_cover(
     folder = db.query(Folder).filter(Folder.id == folder_id, Folder.is_deleted == False).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
-    if not can_manage_folder_settings(db, folder, current_user):
+    if not get_folder_capabilities(db, folder, current_user).can_manage_settings:
         raise HTTPException(status_code=403, detail="You don't have permission to manage this folder")
 
-    content_type = file.content_type or ""
-    if not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="只支持上传图片文件")
+    content = await file.read(MAX_FOLDER_COVER_BYTES + 1)
+    if len(content) > MAX_FOLDER_COVER_BYTES:
+        raise HTTPException(status_code=413, detail="文件夹封面不能超过 5 MB")
 
-    ext = os.path.splitext(file.filename or "")[1].lower() or ".png"
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            image_format = (image.format or "").upper()
+            width, height = image.size
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="封面文件不是有效图片") from exc
+
+    ext = FOLDER_COVER_EXTENSIONS.get(image_format)
+    if not ext:
+        raise HTTPException(status_code=400, detail="封面仅支持 JPG、PNG、WEBP 或 GIF")
+    if width <= 0 or height <= 0 or width * height > MAX_FOLDER_COVER_PIXELS:
+        raise HTTPException(status_code=400, detail="封面图片尺寸过大")
+
     stored_name = f"folder-cover-{folder_id}-{uuid.uuid4().hex}{ext}"
     cover_dir = os.path.join(settings.STORAGE_DIR, "covers")
     os.makedirs(cover_dir, exist_ok=True)
     storage_path = os.path.join(cover_dir, stored_name)
 
     with open(storage_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        buffer.write(content)
 
     folder.cover_url = f"/covers/{stored_name}"
     folder.display_mode = "cover"
@@ -577,15 +1055,14 @@ def update_folder(folder_id: int, payload: FolderUpdate, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="Folder not found")
     
     # 权限检查
-    if not can_manage_folder_settings(db, folder, current_user):
+    if not get_folder_capabilities(db, folder, current_user).can_edit:
         raise HTTPException(status_code=403, detail="You don't have permission to manage this folder")
 
     payload_fields = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
 
     if "name" in payload_fields:
-        new_name = (payload.name or "").strip()
-        if not new_name:
-            raise HTTPException(status_code=400, detail="name required")
+        new_name = _normalize_folder_name(payload.name or "")
+        _ensure_unique_folder_name(db, new_name, folder.parent_id, exclude_folder_id=folder.id)
         folder.name = new_name
     if "description" in payload_fields:
         folder.description = payload.description.strip() if payload.description else None
@@ -615,13 +1092,18 @@ def update_folder(folder_id: int, payload: FolderUpdate, db: Session = Depends(g
     return _serialize_folder(folder, db, current_user)
 
 @router.delete("/{folder_id}")
-def delete_folder(folder_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_folder(
+    folder_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     folder = db.query(Folder).filter(Folder.id == folder_id).first()
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
     
     # 权限检查
-    if not can_manage_folder_settings(db, folder, current_user):
+    if not get_folder_capabilities(db, folder, current_user).can_delete:
         raise HTTPException(status_code=403, detail="You don't have permission to manage this folder")
     
     folder_ids = _collect_descendant_folder_ids(db=db, root_folder_id=folder_id)
@@ -648,6 +1130,19 @@ def delete_folder(folder_id: int, db: Session = Depends(get_db), current_user: U
             for summary_id in summary_ids:
                 pipeline.delete_existing(db, summary_id)
 
+    record_audit_log(
+        db,
+        current_user,
+        "folder.delete",
+        "folder",
+        folder.id,
+        request=request,
+        detail={
+            "name": folder.name,
+            "deleted_folders": len(folder_ids),
+            "deleted_files": len(file_ids),
+        },
+    )
     db.commit()
     return {"message": "Folder deleted successfully", "deleted_folders": len(folder_ids), "deleted_files": len(file_ids)}
 
