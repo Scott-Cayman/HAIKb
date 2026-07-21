@@ -10,6 +10,7 @@ from app.services.folder_ai_preset_service import folder_ai_preset_service
 
 CASES = [
     ("上班时间是什么时候", True),
+    ("考勤时间", True),
     ("考勤制度是什么", True),
     ("早上最晚几点到岗", True),
     ("每天早晨什么时候算正式上工", True),
@@ -24,6 +25,77 @@ CASES = [
 
 def main() -> None:
     failures = []
+    source = """### 工作制度
+
+1. 上班时间 9:00，下班时间 18:00，每天两次上下班人脸识别打卡，考勤以钉钉记录为准。
+2. 考勤统计周期以一个月为周期，每个月最后一天为考勤核算日。
+3. 每天打卡迟到超过 10 分钟计为迟到，每月迟到三次视为缺勤一天。
+4. 单个工作日在规定下班时间未打卡、未请假擅自离岗，视为早退，每月三次视为缺勤。
+5. 未在工作日按时出勤且无请假手续，视为缺勤，扣除一天全额工资。
+6. 2 天以上（含两天）无假条的缺勤，视为旷工，旷工扣除双倍全额工资。
+7. 旷工五天以上视为自动离职。
+8. 调休、外出、出差需提前告知团队长并申请，不得先斩后奏，外出申请需当天提交有效。"""
+    chunks = folder_ai_preset_service._split_source(source)
+    if len(chunks) != 8:
+        failures.append({"query": "编号制度预拆分", "expected": 8, "actual": len(chunks)})
+
+    schedule = folder_ai_preset_service._sanitize_questions(
+        [
+            {
+                "question": "上班时间和下班时间是什么？",
+                "aliases": ["上下班时间"],
+                "answer": "上班时间 9:00，下班时间 18:00。",
+                "keywords": ["上班时间", "下班时间"],
+                "priority": 90,
+            }
+        ]
+    )[0]
+    if "考勤时间" not in schedule["aliases"]:
+        failures.append({"query": "考勤时间别名补全", "expected": True, "actual": schedule["aliases"]})
+
+    merged_schedule = folder_ai_preset_service._merge_daily_schedule_questions(
+        [
+            {
+                "question": "上班时间是什么时候？",
+                "aliases": ["几点上班"],
+                "answer": "上班时间为 9:00。",
+                "keywords": ["上班时间"],
+                "priority": 90,
+                "is_enabled": True,
+            },
+            {
+                "question": "下班时间是什么时候？",
+                "aliases": ["几点下班"],
+                "answer": "下班时间为 18:00。",
+                "keywords": ["下班时间"],
+                "priority": 90,
+                "is_enabled": True,
+            },
+        ]
+    )
+    if len(merged_schedule) != 1 or "上班时间" not in merged_schedule[0]["answer"] or "下班时间" not in merged_schedule[0]["answer"]:
+        failures.append(
+            {
+                "query": "上下班时间完整合并",
+                "expected": "一条包含上下班时间的完整答案",
+                "actual": merged_schedule,
+            }
+        )
+
+    cycle = folder_ai_preset_service._sanitize_questions(
+        [
+            {
+                "question": "考勤统计周期是多久？",
+                "aliases": ["考勤时间", "考勤周期"],
+                "answer": "考勤统计周期以一个月为周期。",
+                "keywords": ["考勤周期"],
+                "priority": 80,
+            }
+        ]
+    )[0]
+    if "考勤时间" in cycle["aliases"]:
+        failures.append({"query": "考勤周期别名隔离", "expected": False, "actual": cycle["aliases"]})
+
     with SessionLocal() as db:
         folder_ids = [row[0] for row in db.query(Folder.id).filter(Folder.is_deleted == False).all()]
         for query, expected in CASES:

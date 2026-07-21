@@ -14,6 +14,8 @@ export interface FavoriteFileData {
   size: number;
   folder_id?: number | null;
   preview_status: string;
+  thumbnail_status?: string | null;
+  file_ext?: string | null;
   created_at?: string | null;
 }
 

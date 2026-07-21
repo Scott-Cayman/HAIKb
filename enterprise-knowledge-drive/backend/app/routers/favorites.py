@@ -28,6 +28,8 @@ class FavoriteFileData(BaseModel):
     size: int
     folder_id: Optional[int]
     preview_status: str
+    thumbnail_status: Optional[str] = None
+    file_ext: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
@@ -158,6 +160,8 @@ def get_favorites(
                         size=file.size,
                         folder_id=file.folder_id,
                         preview_status=file.preview_status,
+                        thumbnail_status=file.thumbnail_status,
+                        file_ext=file.file_ext,
                         created_at=file.created_at,
                     ),
                 )

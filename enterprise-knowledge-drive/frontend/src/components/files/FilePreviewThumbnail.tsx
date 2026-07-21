@@ -115,6 +115,12 @@ const FilePreviewThumbnail = ({
           return;
         }
 
+        if (response.status === 403 || response.status === 404) {
+          setRuntimeStatus('failed');
+          setLoadFailed(true);
+          return;
+        }
+
         if (!response.ok) throw new Error(`thumbnail request failed: ${response.status}`);
 
         const blob = await response.blob();
@@ -127,6 +133,7 @@ const FilePreviewThumbnail = ({
           if (attempt < 3) {
             retryTimer = window.setTimeout(loadThumbnail, 1500 * attempt);
           } else {
+            setRuntimeStatus('failed');
             setLoadFailed(true);
           }
         }
@@ -146,7 +153,7 @@ const FilePreviewThumbnail = ({
     [thumbnailUrl],
   );
 
-  const isGenerating = runtimeStatus === 'pending' || runtimeStatus === 'processing';
+  const isGenerating = !loadFailed && (runtimeStatus === 'pending' || runtimeStatus === 'processing');
   const showImage = runtimeStatus === 'success' && thumbnailUrl && !loadFailed;
 
   return (

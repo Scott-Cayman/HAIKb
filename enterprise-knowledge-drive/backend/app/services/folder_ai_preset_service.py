@@ -164,9 +164,12 @@ class FolderAiPresetService:
             for chunk in chunks:
                 generated.extend(self._fallback_parse(chunk))
 
+        generated = self._merge_daily_schedule_questions(generated)
         questions = self._dedupe_questions(generated)
         if not questions:
             questions = self._fallback_parse(source)
+        warnings.extend(self._quality_warnings(questions))
+        warnings = list(dict.fromkeys(warnings))
         return {
             "questions": questions,
             "source_length": len(source),
@@ -439,6 +442,7 @@ class FolderAiPresetService:
                 result.append(f"{start_match.group(1)}点上班{end_match.group(1)}点下班")
                 if start_match.group(1) == "9" and end_match.group(1) == "18":
                     result.extend(["朝九晚六", "早九晚六是真的吗"])
+            result.extend(["考勤时间", "公司考勤时间", "考勤时间是几点", "考勤几点到几点", "打卡时间"])
         if "打卡" in compact and re.search(r"(?:每天|每日).{0,8}(?:两次|2次|二次)", compact):
             result.extend(["一天打几次卡", "每天需要打卡几次", "上下班都要打卡吗", "打卡次数是多少"])
         if "迟到" in compact:
@@ -990,25 +994,70 @@ class FolderAiPresetService:
         return max(rows, key=lambda row: (ancestor_rank.get(row[1].folder_id, 0), row[0].priority, row[0].id))
 
     def _split_source(self, source: str, max_chars: int = 1400) -> List[str]:
-        sections = re.split(r"(?=^#{1,3}\s+)", source, flags=re.MULTILINE)
+        """Split authored text into semantic units before asking the LLM to organize it.
+
+        Markdown headings provide context, while numbered policy items remain separate
+        units. This prevents one large FAQ-generation call from merging unrelated rules.
+        """
+
+        sections = re.split(r"(?=^#{1,6}\s+)", source, flags=re.MULTILINE)
         sections = [section.strip() for section in sections if section.strip()]
         if not sections:
             sections = [source]
-        chunks: List[str] = []
-        buffer = ""
+
+        numbered_item = re.compile(
+            r"^\s*(?:\d+[.)、]|[（(]\d+[)）]|[一二三四五六七八九十]+[、.])\s*(.+)$"
+        )
+        units: List[str] = []
         for section in sections:
-            if len(section) > max_chars:
-                paragraphs = [item.strip() for item in re.split(r"\n\s*\n", section) if item.strip()]
+            lines = section.splitlines()
+            heading = lines[0].strip() if lines and re.match(r"^#{1,6}\s+", lines[0].strip()) else ""
+            body_lines = lines[1:] if heading else lines
+            preamble: List[str] = []
+            items: List[List[str]] = []
+            current_item: List[str] = []
+
+            for raw_line in body_lines:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if numbered_item.match(line):
+                    if current_item:
+                        items.append(current_item)
+                    current_item = [line]
+                    continue
+                if current_item:
+                    current_item.append(line)
+                else:
+                    preamble.append(line)
+            if current_item:
+                items.append(current_item)
+
+            if items:
+                context = ([heading] if heading else []) + preamble
+                for item in items:
+                    units.append("\n".join(context + item).strip())
             else:
-                paragraphs = [section]
+                units.append(section)
+
+        chunks: List[str] = []
+        for unit in units:
+            if len(unit) <= max_chars:
+                chunks.append(unit)
+                continue
+            paragraphs = [item.strip() for item in re.split(r"\n\s*\n", unit) if item.strip()]
+            if len(paragraphs) == 1:
+                chunks.extend(unit[index : index + max_chars] for index in range(0, len(unit), max_chars))
+                continue
+            buffer = ""
             for paragraph in paragraphs:
                 if buffer and len(buffer) + len(paragraph) + 2 > max_chars:
                     chunks.append(buffer)
                     buffer = paragraph
                 else:
                     buffer = f"{buffer}\n\n{paragraph}".strip()
-        if buffer:
-            chunks.append(buffer)
+            if buffer:
+                chunks.append(buffer)
         return chunks or [source[:max_chars]]
 
     def _organize_chunk_with_llm(self, source: str) -> List[Dict[str, Any]]:
@@ -1016,11 +1065,16 @@ class FolderAiPresetService:
             "你是企业知识库预设问答整理器。管理员会输入普通文本、流程说明或零散问题。"
             "只依据原文拆分为可快速命中的问答，不得补写原文没有的制度、金额、入口或步骤。"
             "输出严格 JSON 数组，每项字段为 question、aliases、answer、keywords、priority。"
-            "每个 question 只对应一个可以独立回答的原子事实或操作意图；若同一段包含上下班时间、"
-            "打卡次数、迟到规则等多个独立事实，必须拆成多条问答，不能合并成一个宽泛问题。"
-            "question 是员工最可能直接提问的标准问题；aliases 给 5 到 8 个真实自然的口语改写，"
-            "需同时覆盖简短问法、同义词、隐含表达和带场景的问法，例如“几点上班”“最晚几点到岗”；"
+            "先逐句提取事实，再生成问答；一个 question 只能有一个业务概念、判断条件或操作意图。"
+            "次数与方式、定义与处罚、统计周期与核算日期、申请动作与提交期限必须分别成条。"
+            "禁止用“和、以及、及、/、顿号”把多个可独立提问的事项合并；也禁止一个 question 出现两个问句。"
+            "同一概念的起止时间可以合并，例如上班与下班共同组成每日考勤时间；但考勤时间、考勤统计周期、"
+            "考勤核算日是三个不同概念，绝不能互作别名或合并答案。"
+            "question 是员工最可能直接提问的标准问题；aliases 给 4 到 8 个真实自然的口语改写，"
+            "同时覆盖简短问法、同义词和带场景的问法。每日上下班安排必须覆盖“考勤时间”；"
+            "考勤周期只能使用“考勤周期、考勤统计周期、考勤核算周期”等周期表达。"
             "answer 保留原文事实与 Markdown 层级；keywords 为 2 到 6 个词；priority 为 1 到 100。"
+            "每个 answer 必须可以脱离上下文独立阅读，不能省略主语，例如不能只写“每月三次视为缺勤”。"
         )
         user_prompt = (
             "请把下面内容整理为结构化预设问答。若某段只有规则而没有显式问题，请根据该段主题生成一个自然问题；"
@@ -1030,13 +1084,56 @@ class FolderAiPresetService:
         response = llm_service.chat(
             [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             temperature=0.1,
-            max_tokens=2400,
+            max_tokens=3200,
         )
         parsed = self._extract_json_array(response)
-        return self._sanitize_questions(parsed)
+        questions = self._sanitize_questions(parsed)
+        issues = self._quality_warnings(questions)
+        if not issues:
+            return questions
+
+        repair_prompt = (
+            "下面是一组根据制度原文生成的预设问答，但原子性检查发现问题。"
+            "请严格修复：把复合问题拆成独立问答，保持答案主语完整，不遗漏数字、条件、处罚和期限；"
+            "每日考勤时间与考勤统计周期、考勤核算日必须分开。"
+            "输出严格 JSON 数组，每项只包含 question、aliases、answer、keywords、priority，不要代码围栏。\n\n"
+            f"原文：\n{source}\n\n检查问题：\n- "
+            + "\n- ".join(issues)
+            + "\n\n待修复 JSON：\n"
+            + json.dumps(questions, ensure_ascii=False)
+        )
+        repaired_response = llm_service.chat(
+            [{"role": "system", "content": system_prompt}, {"role": "user", "content": repair_prompt}],
+            temperature=0,
+            max_tokens=3200,
+        )
+        repaired = self._sanitize_questions(self._extract_json_array(repaired_response))
+        return repaired or questions
 
     def _fallback_parse(self, source: str) -> List[Dict[str, Any]]:
         lines = source.splitlines()
+        numbered_statements = []
+        numbered_pattern = re.compile(
+            r"^\s*(?:\d+[.)、]|[（(]\d+[)）]|[一二三四五六七八九十]+[、.])\s*(.+)$"
+        )
+        for line in lines:
+            match = numbered_pattern.match(line.strip())
+            if match:
+                numbered_statements.append(match.group(1).strip())
+        if numbered_statements:
+            return self._sanitize_questions(
+                [
+                    {
+                        "question": self._fallback_question_for_statement(statement),
+                        "aliases": [],
+                        "answer": statement,
+                        "keywords": [],
+                        "priority": 60,
+                    }
+                    for statement in numbered_statements
+                ]
+            )
+
         current_question: Optional[str] = None
         answer_lines: List[str] = []
         result: List[Dict[str, Any]] = []
@@ -1070,6 +1167,29 @@ class FolderAiPresetService:
             question += "？"
         return [{"question": question, "aliases": [], "answer": compact, "keywords": [], "priority": 60}]
 
+    def _fallback_question_for_statement(self, statement: str) -> str:
+        compact = re.sub(r"\s+", "", statement)
+        if "上班时间" in compact and "下班时间" in compact:
+            return "考勤时间是怎么规定的？"
+        if "考勤" in compact and "统计周期" in compact:
+            return "考勤统计周期是多久？"
+        if "迟到" in compact and "分钟" in compact:
+            return "迟到时间是怎么规定的？"
+        if "迟到" in compact and "缺勤" in compact:
+            return "迟到多少次算缺勤？"
+        if "早退" in compact:
+            return "早退是怎么规定的？"
+        if "旷工" in compact and "自动离职" in compact:
+            return "旷工多少天视为自动离职？"
+        if "旷工" in compact:
+            return "旷工是怎么规定的？"
+        if "缺勤" in compact:
+            return "缺勤是怎么规定的？"
+        if any(term in compact for term in ("调休", "外出", "出差")):
+            return "调休、外出或出差需要怎么申请？"
+        summary = re.sub(r"[。；;]+$", "", statement).strip()[:32]
+        return f"{summary}的相关规定是什么？"
+
     def _extract_json_array(self, raw: str) -> List[Any]:
         text = (raw or "").strip()
         try:
@@ -1093,10 +1213,11 @@ class FolderAiPresetService:
                 continue
             aliases = [re.sub(r"\s+", " ", str(item).strip()) for item in (value.get("aliases") or [])]
             keywords = [re.sub(r"\s+", " ", str(item).strip()) for item in (value.get("keywords") or [])]
+            aliases = self._augment_aliases(question, answer, aliases)
             result.append(
                 {
                     "question": question[:160],
-                    "aliases": self._unique_strings(aliases, limit=8),
+                    "aliases": aliases,
                     "answer": answer,
                     "keywords": self._unique_strings(keywords, limit=8),
                     "priority": max(1, min(100, int(value.get("priority") or 80))),
@@ -1104,6 +1225,135 @@ class FolderAiPresetService:
                 }
             )
         return result
+
+    def _augment_aliases(self, question: str, answer: str, aliases: Sequence[str]) -> List[str]:
+        """Add conservative domain aliases that the organizer commonly omits."""
+
+        context = f"{question}\n{answer}"
+        compact = re.sub(r"\s+", "", context)
+        generated: List[str] = []
+        filtered_aliases = [str(item).strip() for item in aliases if str(item).strip()]
+
+        is_daily_schedule = "上班时间" in compact and "下班时间" in compact
+        is_attendance_cycle = "考勤" in compact and (
+            "统计周期" in compact or "核算周期" in compact or "一个月为周期" in compact
+        )
+        is_settlement_day = "考勤" in compact and ("核算日" in compact or "结算日" in compact)
+
+        if is_daily_schedule:
+            generated.extend(["考勤时间", "公司考勤时间", "考勤时间是几点", "考勤几点到几点", "打卡时间"])
+        if is_attendance_cycle:
+            generated.extend(["考勤周期", "考勤统计周期", "考勤核算周期", "考勤多久统计一次"])
+            blocked = {
+                self.normalize_question(item)
+                for item in ("考勤时间", "公司考勤时间", "打卡时间", "上下班时间")
+            }
+            filtered_aliases = [
+                item for item in filtered_aliases if self.normalize_question(item) not in blocked
+            ]
+        if is_settlement_day:
+            generated.extend(["考勤核算日", "考勤结算日", "每月哪天核算考勤"])
+
+        return self._unique_strings(generated + filtered_aliases, limit=12)
+
+    def _merge_daily_schedule_questions(self, values: Sequence[Any]) -> List[Dict[str, Any]]:
+        """Keep the start and end of the same daily schedule in one complete answer."""
+
+        items = [dict(item) for item in values if isinstance(item, dict)]
+        start_index: Optional[int] = None
+        end_index: Optional[int] = None
+        start_pattern = re.compile(r"上班时间(?:为|是|[:：]|\s)*\s*\d{1,2}(?::\d{2})?")
+        end_pattern = re.compile(r"下班时间(?:为|是|[:：]|\s)*\s*\d{1,2}(?::\d{2})?")
+
+        for index, item in enumerate(items):
+            context = re.sub(r"\s+", "", f"{item.get('question', '')}{item.get('answer', '')}")
+            has_start = bool(start_pattern.search(context))
+            has_end = bool(end_pattern.search(context))
+            if has_start and has_end:
+                return items
+            if has_start and start_index is None:
+                start_index = index
+            if has_end and end_index is None:
+                end_index = index
+
+        if start_index is None or end_index is None or start_index == end_index:
+            return items
+
+        start_item = items[start_index]
+        end_item = items[end_index]
+        start_answer = str(start_item.get("answer") or "").strip().rstrip("。；; ")
+        end_answer = str(end_item.get("answer") or "").strip().rstrip("。；; ")
+        merged = {
+            "question": "考勤时间是怎么规定的？",
+            "aliases": self._unique_strings(
+                [
+                    "考勤时间",
+                    "公司考勤时间",
+                    "上下班时间",
+                    "几点上班",
+                    "几点下班",
+                    "考勤几点到几点",
+                    "打卡时间",
+                ]
+                + list(start_item.get("aliases") or [])
+                + list(end_item.get("aliases") or []),
+                limit=12,
+            ),
+            "answer": f"{start_answer}；{end_answer}。",
+            "keywords": self._unique_strings(
+                ["考勤时间", "上班时间", "下班时间"]
+                + list(start_item.get("keywords") or [])
+                + list(end_item.get("keywords") or []),
+                limit=8,
+            ),
+            "priority": max(int(start_item.get("priority") or 80), int(end_item.get("priority") or 80)),
+            "is_enabled": bool(start_item.get("is_enabled", True)) and bool(end_item.get("is_enabled", True)),
+        }
+
+        first_index = min(start_index, end_index)
+        merged_items: List[Dict[str, Any]] = []
+        for index, item in enumerate(items):
+            if index == first_index:
+                merged_items.append(merged)
+            if index not in (start_index, end_index):
+                merged_items.append(item)
+        return merged_items
+
+    def _quality_warnings(self, questions: Sequence[Dict[str, Any]]) -> List[str]:
+        """Report organizer output that is syntactically valid but not safely atomic."""
+
+        warnings: List[str] = []
+        for index, item in enumerate(questions, start=1):
+            question = str(item.get("question") or "").strip()
+            answer = str(item.get("answer") or "").strip()
+            aliases = [str(value) for value in (item.get("aliases") or [])]
+            compact = re.sub(r"\s+", "", f"{question}{answer}")
+            daily_schedule = "上班时间" in compact and "下班时间" in compact
+            question_marks = question.count("？") + question.count("?")
+            enumerated_intents = bool(re.search(r"[、/]", question))
+            compound_prompt = bool(
+                re.search(r"(?:几次|多少次|多久|哪天|什么|怎么|如何).*(?:几次|多少次|多久|哪天|什么|怎么|如何)", question)
+            )
+            if question_marks > 1 or compound_prompt or (enumerated_intents and not daily_schedule):
+                warnings.append(f"第 {index} 条可能包含多个提问意图，请拆成独立问答：{question}")
+
+            if "考勤" in compact and "统计周期" in compact and ("核算日" in compact or "结算日" in compact):
+                warnings.append(f"第 {index} 条同时包含考勤周期和核算日期，请分别成条：{question}")
+            if "视为旷工" in compact and ("扣除" in compact or "扣薪" in compact or "工资" in compact):
+                warnings.append(f"第 {index} 条同时包含旷工定义和处罚，请分别成条：{question}")
+            if "视为缺勤" in compact and ("扣除" in compact or "扣薪" in compact or "工资" in compact):
+                warnings.append(f"第 {index} 条同时包含缺勤定义和处罚，请分别成条：{question}")
+            if "提前告知" in compact and ("当天提交" in compact or "提交期限" in compact):
+                warnings.append(f"第 {index} 条同时包含申请动作和提交期限，请分别成条：{question}")
+
+            normalized_aliases = {self.normalize_question(value) for value in aliases}
+            if (
+                "考勤" in compact
+                and ("统计周期" in compact or "核算周期" in compact)
+                and self.normalize_question("考勤时间") in normalized_aliases
+            ):
+                warnings.append(f"第 {index} 条把考勤时间误作考勤周期别名，请删除该别名：{question}")
+        return list(dict.fromkeys(warnings))
 
     def _dedupe_questions(self, values: Sequence[Any]) -> List[Dict[str, Any]]:
         sanitized = self._sanitize_questions(values)

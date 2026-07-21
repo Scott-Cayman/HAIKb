@@ -288,9 +288,10 @@ const PresetQuestions = () => {
             setWarnings([]);
           }}
           disabled={!selectedFolderId}
-          className="inline-flex items-center gap-2 rounded-xl border border-[#bfe9e5] bg-white px-4 py-2.5 text-sm font-semibold text-[#198f91] shadow-sm transition hover:bg-[#f1fbfa] disabled:opacity-50"
+          title={!selectedFolderId ? '请先选择一个文件夹' : undefined}
+          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-[#bfe9e5] bg-white px-4 py-2.5 text-sm font-semibold text-[#198f91] shadow-sm transition hover:bg-[#f1fbfa] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#45d5c4]/15 disabled:cursor-not-allowed disabled:!border-slate-200 disabled:!bg-slate-100 disabled:!text-slate-400 disabled:shadow-none disabled:hover:!bg-slate-100"
         >
-          <Plus className="h-4 w-4" />新建配置
+          <Plus className="h-4 w-4" />{selectedFolderId ? '新建配置' : '请先选择文件夹'}
         </button>
       </header>
 
@@ -339,10 +340,17 @@ const PresetQuestions = () => {
                       type="button"
                       onClick={() => void handleSaveAgentPrompt()}
                       disabled={!agentPrompt?.can_edit || agentPromptSaving || !agentPromptContent.trim()}
-                      className="inline-flex items-center gap-2 rounded-xl bg-[#14243b] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1c3553] disabled:opacity-45"
+                      title={!agentPrompt?.can_edit ? '只有超级管理员可以修改全局 Agent 设定' : undefined}
+                      className="admin-primary-action inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold shadow-sm transition focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#45d5c4]/20 disabled:cursor-not-allowed"
                     >
                       {agentPromptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                      保存全局设定
+                      {agentPromptSaving
+                        ? '正在保存'
+                        : !agentPrompt?.can_edit
+                          ? '仅超级管理员可保存'
+                          : !agentPromptContent.trim()
+                            ? '请输入设定内容'
+                            : '保存全局设定'}
                     </button>
                   </div>
                 </div>
@@ -404,8 +412,15 @@ const PresetQuestions = () => {
               <section className="rounded-2xl border border-slate-200 bg-[#fbfefd] p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div><h3 className="font-semibold text-slate-900">原始问题文本</h3><p className="mt-1 text-xs text-slate-500">可直接粘贴制度、FAQ、流程或普通段落，无需手写 Markdown 格式。</p></div>
-                  <button type="button" onClick={() => void handleOrganize()} disabled={organizing || !sourceContent.trim()} className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#45d5c4] to-[#39bfe0] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_8px_22px_rgba(53,190,190,0.2)] disabled:opacity-50">
-                    {organizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}AI 整理并预览
+                  <button
+                    type="button"
+                    onClick={() => void handleOrganize()}
+                    disabled={organizing || !sourceContent.trim()}
+                    title={!sourceContent.trim() ? '请先输入需要整理的原始文本' : undefined}
+                    className="admin-gradient-action inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold shadow-[0_8px_22px_rgba(53,190,190,0.2)] transition focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#45d5c4]/20 disabled:cursor-not-allowed"
+                  >
+                    {organizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
+                    {organizing ? '正在整理' : !sourceContent.trim() ? '请先输入原始文本' : 'AI 整理并预览'}
                   </button>
                 </div>
                 <textarea value={sourceContent} onChange={(event) => setSourceContent(event.target.value)} rows={10} placeholder="例如：会议室需要在钉钉工作台的会议室应用中预定……" className="w-full resize-y rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm leading-7 outline-none focus:border-[#6ed6d0] focus:ring-4 focus:ring-[#6ed6d0]/10" />
@@ -426,6 +441,41 @@ const PresetQuestions = () => {
                         <button type="button" onClick={() => setQuestions((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="grid h-10 w-10 place-items-center rounded-xl text-slate-400 hover:bg-rose-50 hover:text-rose-500" aria-label="删除该问答"><Trash2 className="h-4 w-4" /></button>
                       </div>
                       <textarea value={item.answer} onChange={(event) => updateQuestion(index, { answer: event.target.value })} rows={4} placeholder="标准答案" className="mt-3 w-full resize-y rounded-xl border border-slate-200 px-3 py-2.5 text-sm leading-6 outline-none focus:border-[#6ed6d0]" />
+                      <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_140px_auto]">
+                        <label className="space-y-1.5 text-xs text-slate-500">
+                          <span>关键词（参与命中，用逗号分隔）</span>
+                          <input
+                            value={(item.keywords || []).join('，')}
+                            onChange={(event) => updateQuestion(index, {
+                              keywords: event.target.value.split(/[，,]/).map((value) => value.trim()).filter(Boolean),
+                            })}
+                            placeholder="例如：考勤时间、打卡时间"
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-[#6ed6d0]"
+                          />
+                        </label>
+                        <label className="space-y-1.5 text-xs text-slate-500">
+                          <span>命中优先级</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={item.priority}
+                            onChange={(event) => updateQuestion(index, {
+                              priority: Math.max(1, Math.min(100, Number(event.target.value) || 1)),
+                            })}
+                            className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-[#6ed6d0]"
+                          />
+                        </label>
+                        <label className="flex items-end gap-2 pb-2.5 text-xs font-medium text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={item.is_enabled}
+                            onChange={(event) => updateQuestion(index, { is_enabled: event.target.checked })}
+                            className="h-4 w-4 accent-[#2bbfba]"
+                          />
+                          启用该问答
+                        </label>
+                      </div>
                     </article>
                   ))}
                   {questions.length === 0 ? <div className="grid min-h-44 place-items-center rounded-2xl border border-dashed border-slate-200 bg-slate-50/60 text-center text-sm text-slate-400"><div><FileText className="mx-auto mb-2 h-6 w-6" />粘贴文本后点击“AI 整理并预览”</div></div> : null}
@@ -433,8 +483,15 @@ const PresetQuestions = () => {
               </section>
 
               <div className="flex justify-end border-t border-slate-100 pt-5">
-                <button type="button" onClick={() => void handlePublish()} disabled={saving || questions.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-[#14243b] px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-300/40 transition hover:bg-[#1c3553] disabled:opacity-50">
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}确认发布
+                <button
+                  type="button"
+                  onClick={() => void handlePublish()}
+                  disabled={saving || questions.length === 0}
+                  title={questions.length === 0 ? '请先整理或添加至少一条问答' : undefined}
+                  className="admin-primary-action inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border px-5 py-3 text-sm font-semibold shadow-lg shadow-slate-300/40 transition focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#45d5c4]/20 disabled:cursor-not-allowed"
+                >
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  {saving ? '正在发布' : questions.length === 0 ? '暂无可发布问答' : '确认发布'}
                 </button>
               </div>
             </div>

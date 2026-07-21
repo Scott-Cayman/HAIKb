@@ -427,12 +427,177 @@
 .admin-shell [class~="hover:bg-slate-800/50"]:hover,
 .admin-shell [class~="hover:bg-slate-800/60"]:hover,
 .admin-shell [class~="hover:bg-slate-800/80"]:hover,
+.admin-shell [class~="hover:bg-slate-800/90"]:hover,
 .admin-shell [class~="hover:bg-slate-700"]:hover,
+.admin-shell [class~="hover:bg-slate-700/40"]:hover,
+.admin-shell [class~="hover:bg-slate-700/50"]:hover,
+.admin-shell [class~="hover:bg-slate-700/60"]:hover,
+.admin-shell [class~="hover:bg-slate-700/70"]:hover,
 .admin-shell [class~="hover:bg-slate-600"]:hover { background-color: rgba(221, 241, 244, 0.92); }
 .admin-shell [class~="hover:text-slate-200"]:hover,
 .admin-shell [class~="hover:text-white"]:hover { color: #173247; }
 .admin-shell [class~="hover:bg-indigo-500"]:hover,
 .admin-shell [class~="hover:bg-indigo-600"]:hover { background-color: #25afa8; }
+
+/* Semantic admin actions must retain accessible contrast after the legacy
+   dark-to-light utility translation above. */
+.admin-shell .admin-primary-action {
+  border-color: transparent !important;
+  background-color: #20aaa7 !important;
+  color: #ffffff !important;
+}
+
+.admin-shell .admin-primary-action:hover:not(:disabled) {
+  background-color: #188f91 !important;
+}
+
+.admin-shell .admin-gradient-action {
+  border-color: transparent !important;
+  background-color: #35c6bd !important;
+  background-image: linear-gradient(90deg, #45d5c4, #39bfe0) !important;
+  color: #ffffff !important;
+}
+
+.admin-shell .admin-gradient-action:hover:not(:disabled) {
+  background-image: linear-gradient(90deg, #36c8b7, #2eafd1) !important;
+}
+
+.admin-shell .admin-primary-action:disabled,
+.admin-shell .admin-gradient-action:disabled {
+  border-color: #e2e8f0 !important;
+  background-color: #f1f5f9 !important;
+  background-image: none !important;
+  color: #94a3b8 !important;
+  box-shadow: none !important;
+}
+
+/* Folder permission controls use semantic classes so they are not affected by
+   the legacy dark-to-light utility bridge above. */
+.admin-shell .admin-secondary-action {
+  border-color: #bfe6e5 !important;
+  background-color: rgba(255, 255, 255, 0.94) !important;
+  color: #167d84 !important;
+  box-shadow: 0 7px 20px rgba(45, 132, 146, 0.08);
+}
+
+.admin-shell .admin-secondary-action:hover:not(:disabled) {
+  border-color: #72d1cc !important;
+  background-color: #eaf9f7 !important;
+  color: #0f6c74 !important;
+  transform: translateY(-1px);
+}
+
+.admin-shell .admin-secondary-action:focus-visible,
+.admin-shell .admin-primary-action:focus-visible {
+  outline: 3px solid rgba(53, 191, 184, 0.25);
+  outline-offset: 2px;
+}
+
+.admin-shell .admin-folder-search {
+  border-color: #d2e5ea !important;
+  background-color: rgba(255, 255, 255, 0.96) !important;
+  color: #173247 !important;
+  box-shadow: inset 0 1px 2px rgba(23, 50, 71, 0.03), 0 5px 16px rgba(45, 132, 146, 0.05);
+}
+
+.admin-shell .admin-folder-search::placeholder {
+  color: #8ba1ae !important;
+}
+
+.admin-shell .admin-folder-search:focus {
+  border-color: #35bfb8 !important;
+  box-shadow: 0 0 0 4px rgba(53, 191, 184, 0.14), 0 6px 18px rgba(45, 132, 146, 0.08);
+}
+
+.admin-shell .admin-folder-tree-item {
+  color: #48697a !important;
+}
+
+.admin-shell .admin-folder-tree-item:hover {
+  background-color: #effaf9 !important;
+  color: #177d82 !important;
+}
+
+.admin-shell .admin-folder-tree-item-active,
+.admin-shell .admin-folder-tree-item-active:hover {
+  background-color: #e1f7f4 !important;
+  background-image: linear-gradient(90deg, #ddf7f3, #e9f8fb) !important;
+  color: #147c82 !important;
+  box-shadow: inset 0 0 0 1px rgba(53, 191, 184, 0.28), 0 6px 18px rgba(45, 132, 146, 0.08);
+}
+
+.admin-shell .admin-capability-tab {
+  background-color: transparent !important;
+  color: #557487 !important;
+}
+
+.admin-shell .admin-capability-tab:hover {
+  background-color: #edf8f8 !important;
+  color: #147c82 !important;
+}
+
+.admin-shell .admin-capability-tab-active,
+.admin-shell .admin-capability-tab-active:hover {
+  background-color: #35bcb7 !important;
+  color: #ffffff !important;
+  box-shadow: 0 8px 20px rgba(32, 170, 167, 0.18) !important;
+}
+
+.admin-shell .admin-permission-status {
+  border: 1px solid rgba(74, 176, 187, 0.2);
+  background-color: #eff9fa !important;
+  background-image: linear-gradient(90deg, #edf9f8, #f2f9fd) !important;
+  color: #426779 !important;
+}
+
+.admin-shell .admin-permission-scope-option {
+  border-color: #d2e5ea !important;
+  background-color: rgba(255, 255, 255, 0.7) !important;
+  color: #416779 !important;
+}
+
+.admin-shell .admin-permission-scope-option:hover {
+  border-color: #85d5d1 !important;
+  background-color: #f1fbfa !important;
+}
+
+.admin-shell .admin-permission-scope-option-active,
+.admin-shell .admin-permission-scope-option-active:hover {
+  border-color: #69cbc6 !important;
+  background-color: #e4f8f5 !important;
+  background-image: linear-gradient(90deg, #e0f8f4, #edf9fc) !important;
+  color: #147c82 !important;
+  box-shadow: 0 7px 20px rgba(45, 132, 146, 0.09);
+}
+
+.admin-shell .admin-permission-scope-icon {
+  background-color: #e0f7f4 !important;
+  color: #17858a !important;
+}
+
+.admin-shell .admin-permission-list-option {
+  background-color: transparent !important;
+  color: #527286 !important;
+}
+
+.admin-shell .admin-permission-list-option:hover {
+  background-color: #eef9f8 !important;
+  color: #177d82 !important;
+}
+
+.admin-shell .admin-permission-list-option-active,
+.admin-shell .admin-permission-list-option-active:hover {
+  background-color: #def6f3 !important;
+  background-image: linear-gradient(90deg, #dcf6f2, #e9f8fb) !important;
+  color: #126f76 !important;
+  box-shadow: inset 0 0 0 1px rgba(53, 191, 184, 0.25);
+}
+
+.admin-shell .admin-effective-rule {
+  border: 1px solid rgba(74, 176, 187, 0.2);
+  background-color: #eaf7f7 !important;
+  color: #416979 !important;
+}
 
 .admin-shell input,
 .admin-shell textarea,

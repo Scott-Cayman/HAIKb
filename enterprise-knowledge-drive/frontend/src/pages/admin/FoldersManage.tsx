@@ -223,7 +223,7 @@ const FoldersManage = () => {
       <div key={folder.id}>
         <button
           onClick={() => setSelectedId(folder.id)}
-          className={`group flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm transition ${selectedId === folder.id ? 'bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-400/30' : 'text-slate-300 hover:bg-slate-800'}`}
+          className={`admin-folder-tree-item group flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm transition ${selectedId === folder.id ? 'admin-folder-tree-item-active' : ''}`}
           style={{ paddingLeft: 10 + depth * 18 }}
         >
           <span
@@ -240,7 +240,7 @@ const FoldersManage = () => {
           >
             {childFolders.length ? (open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />) : <span className="h-1 w-1 rounded-full bg-slate-600" />}
           </span>
-          <Folder className={`h-4 w-4 shrink-0 ${selectedId === folder.id ? 'text-indigo-400' : 'text-slate-500'}`} />
+          <Folder className="h-4 w-4 shrink-0" />
           <span className="truncate">{folder.name.replace(/王朝/g, '王潮')}</span>
         </button>
         {open && childFolders.map((child) => renderFolder(child, depth + 1))}
@@ -262,7 +262,7 @@ const FoldersManage = () => {
           <h1 className="text-3xl font-bold tracking-tight text-white">文件权限</h1>
           <p className="mt-2 text-sm text-slate-400">按整个集团、钉钉部门或具体人员配置可见范围。子级默认继承最近一级权限。</p>
         </div>
-        <button onClick={() => void loadTree()} className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-3.5 py-2.5 text-sm text-slate-300 hover:border-slate-600 hover:bg-slate-700">
+        <button onClick={() => void loadTree()} className="admin-secondary-action inline-flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm font-medium transition">
           <RefreshCw className={`h-4 w-4 ${loadingTree ? 'animate-spin' : ''}`} />刷新目录
         </button>
       </div>
@@ -271,7 +271,7 @@ const FoldersManage = () => {
 
       <div className="grid min-h-[680px] grid-cols-1 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-800/70 shadow-2xl shadow-slate-950/20 xl:grid-cols-[310px_minmax(0,1fr)]">
         <aside className="max-h-[360px] overflow-hidden border-b border-slate-700/80 bg-slate-900/55 p-4 xl:max-h-none xl:border-b-0 xl:border-r">
-          <div className="relative mb-4"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" /><input value={folderQuery} onChange={(event) => setFolderQuery(event.target.value)} placeholder="搜索文件夹" className="w-full rounded-xl border border-slate-700 bg-slate-950/60 py-2.5 pl-9 pr-3 text-sm text-slate-200 outline-none focus:border-indigo-500" /></div>
+          <div className="relative mb-4"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" /><input value={folderQuery} onChange={(event) => setFolderQuery(event.target.value)} placeholder="搜索文件夹" className="admin-folder-search w-full rounded-xl border py-2.5 pl-9 pr-3 text-sm outline-none transition" /></div>
           <div className="max-h-[285px] overflow-y-auto pr-1 xl:max-h-[610px]">{loadingTree ? <div className="flex items-center gap-2 px-3 py-6 text-sm text-slate-500"><Loader2 className="h-4 w-4 animate-spin" />加载目录树</div> : (children.get(null) || []).map((folder) => renderFolder(folder, 0))}</div>
         </aside>
 
@@ -281,8 +281,8 @@ const FoldersManage = () => {
               <div className="flex flex-col gap-4 border-b border-slate-700 pb-5 sm:flex-row sm:items-start sm:justify-between">
                 <div><div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-500"><FolderLock className="h-4 w-4" />当前目录</div><h2 className="text-xl font-semibold text-white">{settings.folder.name.replace(/王朝/g, '王潮')}</h2></div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <button onClick={() => navigate(`/admin/preset-prompts?folderId=${settings.folder.id}`)} className="inline-flex items-center gap-2 rounded-xl border border-cyan-300/30 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-200 transition hover:bg-cyan-400/20"><Sparkles className="h-4 w-4" />配置 AI 预设</button>
-                  <button onClick={() => void save()} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-indigo-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-950/30 hover:bg-indigo-400 disabled:opacity-50">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}保存权限</button>
+                  <button onClick={() => navigate(`/admin/preset-prompts?folderId=${settings.folder.id}`)} className="admin-secondary-action inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition"><Sparkles className="h-4 w-4" />配置 AI 预设</button>
+                  <button onClick={() => void save()} disabled={saving} className="admin-primary-action inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-lg transition">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}保存权限</button>
                 </div>
               </div>
 
@@ -293,11 +293,7 @@ const FoldersManage = () => {
                       key={option.value}
                       type="button"
                       onClick={() => setActiveCapability(option.value)}
-                      className={`rounded-xl px-3 py-2.5 text-sm font-medium transition ${
-                        activeCapability === option.value
-                          ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-950/25'
-                          : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-                      }`}
+                      className={`admin-capability-tab rounded-xl px-3 py-2.5 text-sm font-medium transition ${activeCapability === option.value ? 'admin-capability-tab-active shadow-lg' : ''}`}
                     >
                       {option.label}
                     </button>
@@ -308,17 +304,17 @@ const FoldersManage = () => {
               <section className="rounded-2xl border border-slate-700 bg-slate-900/45 p-5">
                 <div className="flex items-start justify-between gap-4">
                   <div><h3 className="font-semibold text-slate-100">继承策略</h3><p className="mt-1 text-sm leading-6 text-slate-400">本目录未单独配置时，自动继承最近上级目录；一旦添加规则，本目录会独立生效并继续传递给所有子级。</p></div>
-                  <button onClick={clearDirectRules} className="shrink-0 rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800">恢复继承</button>
+                  <button onClick={clearDirectRules} className="admin-secondary-action shrink-0 rounded-lg border px-3 py-2 text-xs font-medium transition">恢复继承</button>
                 </div>
-                <div className="mt-4 rounded-xl bg-slate-950/55 px-4 py-3 text-sm text-slate-300">
+                <div className="admin-permission-status mt-4 rounded-xl px-4 py-3 text-sm">
                   {directRules.some((rule) => rule.capability === activeCapability) ? `当前目录：使用独立${activeOption.label}权限` : inheritedFrom ? `当前目录：继承自“${inheritedFrom.folder_name.replace(/王朝/g, '王潮')}”` : `当前目录：未授予普通用户${activeOption.label}权限`}
                 </div>
               </section>
 
               <section className="space-y-4">
                 <div><h3 className="font-semibold text-slate-100">谁可以{activeOption.label}</h3><p className="mt-1 text-sm text-slate-400">{activeOption.description}。管理员的管理范围仍严格受其所属部门限制。</p></div>
-                <button onClick={() => toggleRule('all')} className={`flex w-full items-center justify-between rounded-xl border p-4 text-left transition ${hasRule('all') ? 'border-indigo-400/50 bg-indigo-500/10' : 'border-slate-700 bg-slate-900/40 hover:border-slate-600'}`}>
-                  <span className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-500/15 text-indigo-300"><Building2 className="h-5 w-5" /></span><span><span className="block font-medium text-slate-100">整个集团可{activeOption.label}</span><span className="mt-0.5 block text-xs text-slate-500">对全部启用账号授予此项能力</span></span></span>{hasRule('all') && <Check className="h-5 w-5 text-indigo-400" />}
+                <button onClick={() => toggleRule('all')} className={`admin-permission-scope-option flex w-full items-center justify-between rounded-xl border p-4 text-left transition ${hasRule('all') ? 'admin-permission-scope-option-active' : ''}`}>
+                  <span className="flex items-center gap-3"><span className="admin-permission-scope-icon grid h-10 w-10 place-items-center rounded-xl"><Building2 className="h-5 w-5" /></span><span><span className="block font-medium text-slate-100">整个集团可{activeOption.label}</span><span className="mt-0.5 block text-xs text-slate-500">对全部启用账号授予此项能力</span></span></span>{hasRule('all') && <Check className="h-5 w-5 text-indigo-400" />}
                 </button>
               </section>
 
@@ -326,20 +322,20 @@ const FoldersManage = () => {
                 <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                   <div className="mb-3 flex items-center gap-2 font-medium text-slate-200"><UsersRound className="h-4 w-4 text-cyan-400" />钉钉部门</div>
                   <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
-                    {orgPaths.map((path) => <button key={path} onClick={() => toggleRule('org', path)} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${hasRule('org', path) ? 'bg-cyan-500/12 text-cyan-200' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}><span className="truncate">{path}</span>{hasRule('org', path) && <Check className="h-4 w-4 shrink-0" />}</button>)}
+                    {orgPaths.map((path) => <button key={path} onClick={() => toggleRule('org', path)} className={`admin-permission-list-option flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition ${hasRule('org', path) ? 'admin-permission-list-option-active' : ''}`}><span className="truncate">{path}</span>{hasRule('org', path) && <Check className="h-4 w-4 shrink-0" />}</button>)}
                   </div>
                 </div>
                 <div className="rounded-2xl border border-slate-700 bg-slate-900/40 p-4">
                   <div className="mb-3 flex items-center gap-2 font-medium text-slate-200"><UserRound className="h-4 w-4 text-amber-400" />指定人员</div>
-                  <div className="relative mb-2"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-600" /><input value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="搜索姓名或部门" className="w-full rounded-lg border border-slate-700 bg-slate-950/60 py-2 pl-8 pr-3 text-xs text-slate-200 outline-none focus:border-indigo-500" /></div>
-                  <div className="max-h-52 space-y-1 overflow-y-auto pr-1">{users.map((user) => <button key={user.id} onClick={() => toggleRule('user', String(user.id))} className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${hasRule('user', String(user.id)) ? 'bg-amber-500/10 text-amber-200' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'}`}><span className="min-w-0"><span className="block truncate">{user.name}</span><span className="block truncate text-[11px] text-slate-600">{user.department_name || '未分配部门'}</span></span>{hasRule('user', String(user.id)) && <Check className="h-4 w-4 shrink-0" />}</button>)}</div>
+                  <div className="relative mb-2"><Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-600" /><input value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="搜索姓名或部门" className="admin-folder-search w-full rounded-lg border py-2 pl-8 pr-3 text-xs outline-none transition" /></div>
+                  <div className="max-h-52 space-y-1 overflow-y-auto pr-1">{users.map((user) => <button key={user.id} onClick={() => toggleRule('user', String(user.id))} className={`admin-permission-list-option flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition ${hasRule('user', String(user.id)) ? 'admin-permission-list-option-active' : ''}`}><span className="min-w-0"><span className="block truncate">{user.name}</span><span className="block truncate text-[11px] text-slate-600">{user.department_name || '未分配部门'}</span></span>{hasRule('user', String(user.id)) && <Check className="h-4 w-4 shrink-0" />}</button>)}</div>
                 </div>
               </section>
 
               <section>
                 <div className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">当前生效对象</div>
                 <div className="flex min-h-12 flex-wrap gap-2 rounded-xl border border-dashed border-slate-700 p-3">
-                  {effectiveRules.length ? effectiveRules.map((rule, index) => <span key={`${rule.subject_type}-${rule.subject_value}-${index}`} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-700/70 px-2.5 py-1.5 text-xs text-slate-200">{rule.subject_type === 'all' ? '整个集团' : rule.subject_type === 'org' ? rule.subject_value : settings.candidate_users.find((user) => String(user.id) === rule.subject_value)?.name || `用户 ${rule.subject_value}`}{directRules.includes(rule) && <X className="h-3 w-3 cursor-pointer text-slate-500" onClick={() => toggleRule(rule.subject_type, rule.subject_value)} />}</span>) : <span className="text-sm text-slate-600">暂无显式权限对象</span>}
+                  {effectiveRules.length ? effectiveRules.map((rule, index) => <span key={`${rule.subject_type}-${rule.subject_value}-${index}`} className="admin-effective-rule inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs">{rule.subject_type === 'all' ? '整个集团' : rule.subject_type === 'org' ? rule.subject_value : settings.candidate_users.find((user) => String(user.id) === rule.subject_value)?.name || `用户 ${rule.subject_value}`}{directRules.includes(rule) && <X className="h-3 w-3 cursor-pointer text-slate-500" onClick={() => toggleRule(rule.subject_type, rule.subject_value)} />}</span>) : <span className="text-sm text-slate-600">暂无显式权限对象</span>}
                 </div>
               </section>
             </div>

@@ -37,7 +37,7 @@ const Favorites = () => {
 
     return {
       kind: isFile ? 'file' : 'folder',
-      id: item.favorite_id,
+      id: targetId ?? item.favorite_id,
       name: title,
       onOpen: () => {
         if (!targetId) return;
@@ -47,6 +47,8 @@ const Favorites = () => {
       sizeLabel: isFile ? formatSize(item.file!.size) : null,
       dateLabel: formatFavoriteDate((isFile ? item.file?.created_at : item.folder?.created_at) || item.created_at),
       previewStatus: isFile ? item.file?.preview_status : null,
+      thumbnailStatus: isFile ? item.file?.thumbnail_status : null,
+      fileExt: isFile ? item.file?.file_ext : null,
       favorite: {
         active: true,
         title: '取消收藏',
