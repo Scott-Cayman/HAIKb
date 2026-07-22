@@ -34,6 +34,7 @@ import { API_BASE_URL } from '../services/backendConfig';
 import FavoriteButton from '../components/FavoriteButton';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
 import { ragApi } from '../services/ragApi';
+import { getKnowledgeFolderPath } from '../services/knowledgeNavigation';
 import { useAuthStore } from '../stores/authStore';
 import { formatSize } from '../utils';
 
@@ -1368,8 +1369,13 @@ const FilePreview = () => {
       return;
     }
 
-    navigate(-1);
-  }, [cameFromSearch, navigate]);
+    if (file?.folder_id) {
+      navigate(getKnowledgeFolderPath(file.folder_id), { replace: true });
+      return;
+    }
+
+    navigate(getKnowledgeFolderPath(null), { replace: true });
+  }, [cameFromSearch, file?.folder_id, navigate]);
 
   const fetchSummary = useCallback(async () => {
     if (!id) return;
@@ -1773,7 +1779,12 @@ const FilePreview = () => {
     <div className="flex min-h-full flex-col space-y-3 md:h-[calc(100vh-8rem)] md:min-h-0 md:space-y-4">
       <div className="flex flex-col gap-3 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between md:p-4">
         <div className="flex min-w-0 items-center gap-2 md:space-x-2">
-          <button onClick={handleBack} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
+          <button
+            onClick={handleBack}
+            aria-label="返回上一级目录"
+            title="返回上一级目录"
+            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
+          >
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div className="min-w-0 flex-1">

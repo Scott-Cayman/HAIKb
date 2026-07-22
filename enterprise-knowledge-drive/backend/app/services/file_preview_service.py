@@ -61,21 +61,23 @@ def _office_to_pdf(input_path: Path, output_dir: Path) -> Path:
             'pdf:calc_pdf_Export:{"SinglePageSheets":'
             '{"type":"boolean","value":"true"}}'
         )
-    result = _run(
-        [
-            soffice,
-            "--headless",
-            "--nologo",
-            "--nofirststartwizard",
-            "--norestore",
-            "--convert-to",
-            export_filter,
-            "--outdir",
-            str(output_dir),
-            str(input_path),
-        ],
-        timeout=30 * 60,
-    )
+    with tempfile.TemporaryDirectory(prefix="haikb-lo-profile-") as profile_dir:
+        result = _run(
+            [
+                soffice,
+                f"-env:UserInstallation={Path(profile_dir).resolve().as_uri()}",
+                "--headless",
+                "--nologo",
+                "--nofirststartwizard",
+                "--norestore",
+                "--convert-to",
+                export_filter,
+                "--outdir",
+                str(output_dir),
+                str(input_path),
+            ],
+            timeout=30 * 60,
+        )
     if result.returncode != 0:
         raise RuntimeError(f"LibreOffice 转换失败: {result.stderr[-800:]}")
 

@@ -4,9 +4,11 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 
 import LibraryItemsView from '../library/LibraryItemsView';
-import type { CollectionItem, CollectionViewMode } from '../library/types';
+import type { CollectionItem } from '../library/types';
 import api from '../../services/api';
+import { ragApi, type BatchSummaryTaskResponse } from '../../services/ragApi';
 import { useFavoriteStatus } from '../../hooks/useFavoriteStatus';
+import { useKnowledgeViewMode } from '../../hooks/useKnowledgeViewMode';
 import { formatFolderDisplayName, type FolderSummary, type ResourceCapabilities } from '../../services/homeFolders';
 import { formatDate, formatSize } from '../../utils';
 import {
@@ -221,17 +223,19 @@ const HomeCloudDriveSection = ({
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const folderUploadInputRef = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
+  const summaryPollTimerRef = useRef<number | null>(null);
   const [currentFolder, setCurrentFolder] = useState<FolderSummary | null>(null);
   const [subfolders, setSubfolders] = useState<FolderSummary[]>([]);
   const [files, setFiles] = useState<FileSummary[]>([]);
   const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbItem[]>([]);
-  const [viewMode, setViewMode] = useState<CollectionViewMode>('grid');
+  const [viewMode, setViewMode] = useKnowledgeViewMode();
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [summaryTask, setSummaryTask] = useState<BatchSummaryTaskResponse | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [showCreateFolderInput, setShowCreateFolderInput] = useState(false);
   const [openMenuKey, setOpenMenuKey] = useState<string | null>(null);
@@ -243,6 +247,13 @@ const HomeCloudDriveSection = ({
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const { favoriteFileIds, favoriteFolderIds, loadFavoriteStatus, toggleFileFavorite, toggleFolderFavorite } = useFavoriteStatus();
+  const isSummaryRunning = summaryTask?.status === 'running';
+
+  useEffect(() => () => {
+    if (summaryPollTimerRef.current) {
+      window.clearTimeout(summaryPollTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     folderCacheRef.current.set(centerFolder.id, centerFolder);
@@ -337,6 +348,41 @@ const HomeCloudDriveSection = ({
     });
   }, [files, loadFavoriteStatus, subfolders]);
 
+  async function pollSummaryTask(taskId: string) {
+    try {
+      const task = await ragApi.getBatchSummaryTask(taskId);
+      setSummaryTask(task);
+      if (task.status === 'running') {
+        summaryPollTimerRef.current = window.setTimeout(() => {
+          void pollSummaryTask(taskId);
+        }, 2000);
+        return;
+      }
+
+      await loadFolderData();
+      await onFolderStructureChange();
+      if (task.status === 'failed' || task.status === 'partial_failed') {
+        setError(task.message || '部分文件的 AI 总结生成失败，请稍后重试');
+      }
+    } catch (summaryError: any) {
+      setError(summaryError?.response?.data?.detail || '读取 AI 总结任务进度失败');
+    }
+  }
+
+  const startBatchSummary = async (fileIds: number[]) => {
+    if (fileIds.length === 0) return;
+    const task = await ragApi.batchSummarizeFiles(fileIds);
+    setSummaryTask(task);
+    if (summaryPollTimerRef.current) {
+      window.clearTimeout(summaryPollTimerRef.current);
+    }
+    if (task.status === 'running') {
+      summaryPollTimerRef.current = window.setTimeout(() => {
+        void pollSummaryTask(task.task_id);
+      }, 1500);
+    }
+  };
+
   const handleCreateFolder = async () => {
     const name = newFolderName.trim();
     if (!name) return;
@@ -359,11 +405,13 @@ const HomeCloudDriveSection = ({
   };
 
   const handleUploadEntries = async (uploadFiles: UploadCandidate[], directories: string[] = []) => {
-    if ((!uploadFiles.length && !directories.length) || !currentFolder?.capabilities?.can_upload) return;
+    if ((!uploadFiles.length && !directories.length) || !currentFolder?.capabilities?.can_upload || isSummaryRunning) return;
 
     setUploading(true);
     setUploadProgress(0);
+    setSummaryTask(null);
     setError(null);
+    const uploadedFileIds: number[] = [];
     try {
       if (directories.length > 0) {
         await api.post('/folders/ensure-upload-paths', {
@@ -376,10 +424,11 @@ const HomeCloudDriveSection = ({
         const formData = new FormData();
         formData.append('file', selectedFile.file);
         formData.append('folder_id', String(activeFolderId));
+        formData.append('auto_start_summary', 'false');
         if (selectedFile.relativePath !== selectedFile.file.name) {
           formData.append('relative_path', selectedFile.relativePath);
         }
-        await api.post('/files/upload', formData, {
+        const response = await api.post<{ id: number }>('/files/upload', formData, {
           timeout: 0,
           headers: { 'Content-Type': 'multipart/form-data' },
           onUploadProgress: (event) => {
@@ -387,10 +436,18 @@ const HomeCloudDriveSection = ({
             setUploadProgress(Math.round(((index + currentRatio) / uploadFiles.length) * 100));
           },
         });
+        uploadedFileIds.push(response.data.id);
         setUploadProgress(Math.round(((index + 1) / uploadFiles.length) * 100));
       }
       await loadFolderData();
       await onFolderStructureChange();
+      if (uploadedFileIds.length > 0) {
+        try {
+          await startBatchSummary(uploadedFileIds);
+        } catch (summaryError: any) {
+          setError(summaryError?.response?.data?.detail || '文件上传成功，但启动 AI 总结任务失败');
+        }
+      }
     } catch (uploadError: any) {
       setError(uploadError?.response?.data?.detail || '文件上传失败，请检查网络后重试');
     } finally {
@@ -419,7 +476,7 @@ const HomeCloudDriveSection = ({
     if (!isFileDrag(event)) return;
     event.preventDefault();
     dragDepthRef.current += 1;
-    if (currentFolder?.capabilities?.can_upload && !uploading) {
+    if (currentFolder?.capabilities?.can_upload && !uploading && !isSummaryRunning) {
       setIsDragActive(true);
     }
   };
@@ -427,7 +484,7 @@ const HomeCloudDriveSection = ({
   const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
     if (!isFileDrag(event)) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = currentFolder?.capabilities?.can_upload && !uploading ? 'copy' : 'none';
+    event.dataTransfer.dropEffect = currentFolder?.capabilities?.can_upload && !uploading && !isSummaryRunning ? 'copy' : 'none';
   };
 
   const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
@@ -442,7 +499,7 @@ const HomeCloudDriveSection = ({
     event.preventDefault();
     dragDepthRef.current = 0;
     setIsDragActive(false);
-    if (!currentFolder?.capabilities?.can_upload || uploading) {
+    if (!currentFolder?.capabilities?.can_upload || uploading || isSummaryRunning) {
       setError('您没有向当前目录上传内容的权限');
       return;
     }
@@ -799,12 +856,18 @@ const HomeCloudDriveSection = ({
               <button
                 type="button"
                 onClick={() => uploadInputRef.current?.click()}
-                disabled={uploading}
+                disabled={uploading || isSummaryRunning}
                 className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-xl bg-gradient-to-r from-[#54dcca] to-[#5cccf0] px-4 text-sm font-medium text-white shadow-sm transition hover:brightness-95 active:translate-y-px disabled:cursor-wait disabled:opacity-70"
                 title="上传文件"
               >
-                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
-                <span>{uploading ? `上传中 ${uploadProgress}%` : '上传文件'}</span>
+                {uploading || isSummaryRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                <span>
+                  {uploading
+                    ? `上传中 ${uploadProgress}%`
+                    : isSummaryRunning
+                      ? `AI 总结 ${summaryTask?.completed_count || 0}/${summaryTask?.total_count || 0}`
+                      : '上传文件'}
+                </span>
               </button>
             ) : null}
 
@@ -812,7 +875,7 @@ const HomeCloudDriveSection = ({
               <button
                 type="button"
                 onClick={() => folderUploadInputRef.current?.click()}
-                disabled={uploading}
+                disabled={uploading || isSummaryRunning}
                 className="inline-flex h-10 items-center gap-2 whitespace-nowrap rounded-xl bg-[#eefaf8] px-4 text-sm font-medium text-[#239f94] transition hover:bg-[#e2f7f3] active:translate-y-px disabled:cursor-wait disabled:opacity-60"
                 title="上传文件夹"
               >

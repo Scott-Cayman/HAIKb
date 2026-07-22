@@ -4,6 +4,7 @@ import { ArrowLeft, FolderCog, ImageUp, Palette, Save, ShieldCheck, Users } from
 
 import FolderVisualEditor from '../components/folders/FolderVisualEditor';
 import { resolveAssetUrl, folderIconOptions, getFolderVisualConfig, type FolderDisplayMode } from '../config/folderVisuals';
+import { getKnowledgeFolderPath } from '../services/knowledgeNavigation';
 import api, { clearCache } from '../services/api';
 
 type FolderBasic = {
@@ -343,7 +344,9 @@ const FolderSettings = () => {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => navigate(`/folders/${folder.id}`)}
+            onClick={() => navigate(getKnowledgeFolderPath(folder.id), { replace: true })}
+            aria-label="返回当前文件夹"
+            title="返回当前文件夹"
             className="rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
           >
             <ArrowLeft className="h-5 w-5" />

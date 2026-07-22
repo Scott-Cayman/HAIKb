@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Dict
@@ -137,19 +138,21 @@ class DocumentParserService:
         if not soffice_cmd:
             raise RuntimeError("LibreOffice 未安装或未加入 PATH，无法进行 Office→PDF 转换。")
 
-        cmd = [
-            soffice_cmd,
-            "--headless",
-            "--nologo",
-            "--nofirststartwizard",
-            "--norestore",
-            "--convert-to",
-            "pdf",
-            "--outdir",
-            str(output_dir),
-            str(input_path),
-        ]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
+        with tempfile.TemporaryDirectory(prefix="haikb-lo-profile-") as profile_dir:
+            cmd = [
+                soffice_cmd,
+                f"-env:UserInstallation={Path(profile_dir).resolve().as_uri()}",
+                "--headless",
+                "--nologo",
+                "--nofirststartwizard",
+                "--norestore",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(output_dir),
+                str(input_path),
+            ]
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
         if result.returncode != 0:
             raise RuntimeError(f"LibreOffice conversion failed: {result.stderr}")
 

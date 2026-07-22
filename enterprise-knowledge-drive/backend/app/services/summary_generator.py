@@ -54,6 +54,7 @@ class SummaryGeneratorService:
         logger.info(f"[SummaryGenerator] llm_service.is_vision_configured(): {llm_service.is_vision_configured()}")
 
         markdown = ""
+        vision_error: Exception | None = None
         
         # 如果是图片且有视觉模型，优先用视觉模型
         if image_path and llm_service.is_vision_configured():
@@ -63,13 +64,19 @@ class SummaryGeneratorService:
                 logger.info(f"[SummaryGenerator] 视觉模型生成成功，长度: {len(markdown)}")
             except Exception as e:
                 logger.exception(f"[SummaryGenerator] 视觉模型失败: {e}")
-                # 视觉模型失败，回退到普通流程
-                pass
+                vision_error = e
         
         # 如果视觉模型没生成成功，尝试普通 LLM
         if not markdown and llm_service.is_configured() and text:
             logger.info(f"[SummaryGenerator] 尝试使用普通 LLM")
             markdown = self._generate_with_llm(file, text, parse_pages, parse_confidence)
+
+        # A textless image cannot produce a truthful rule-based summary. Keep
+        # the failure visible so the batch task can retry it instead of saving
+        # a generic "unrecognized" document that later pollutes retrieval.
+        if not markdown and image_path and not text:
+            reason = str(vision_error) if vision_error else "vision model is unavailable or returned an empty response"
+            raise RuntimeError(f"Image AI summary failed: {reason}")
 
         # 如果都没成功，用规则兜底
         if not markdown:
@@ -77,7 +84,7 @@ class SummaryGeneratorService:
             markdown = self._generate_with_rules(file, text, parse_pages, parse_confidence)
 
         fields = self.extract_structured_fields(markdown)
-        if self._needs_structured_fallback(fields):
+        if text and self._needs_structured_fallback(fields):
             fallback_markdown = self._generate_with_rules(file, text, parse_pages, parse_confidence)
             fallback_fields = self.extract_structured_fields(fallback_markdown)
             if self._is_better_structured_payload(fallback_fields, fields):

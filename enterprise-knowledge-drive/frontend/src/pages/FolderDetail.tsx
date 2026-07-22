@@ -1,13 +1,15 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, File, Upload, UploadCloud, MoreVertical, CheckCircle, XCircle, Loader2, Folder, PencilLine, Trash2, X, Settings2, Sparkles } from 'lucide-react';
+import { ArrowLeft, ChevronRight, File, Upload, UploadCloud, MoreVertical, CheckCircle, XCircle, Loader2, Folder, PencilLine, Trash2, X, Settings2, Sparkles } from 'lucide-react';
 import api from '../services/api';
 import { ragApi, type BatchSummaryTaskResponse } from '../services/ragApi';
+import { getKnowledgeFolderPath } from '../services/knowledgeNavigation';
 import FavoriteButton from '../components/FavoriteButton';
 import InlineItemMenu from '../components/library/InlineItemMenu';
 import LibraryItemsView from '../components/library/LibraryItemsView';
 import type { CollectionItem } from '../components/library/types';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
+import { useKnowledgeViewMode } from '../hooks/useKnowledgeViewMode';
 import { formatDate, formatSize } from '../utils';
 import {
   collectDroppedUpload,
@@ -77,8 +79,6 @@ interface UploadItem {
   error?: string;
 }
 
-type ViewMode = 'list' | 'grid';
-
 type ActionTarget =
   | { kind: 'folder'; id: number; name: string }
   | { kind: 'file'; id: number; name: string; size: number };
@@ -87,6 +87,7 @@ const FolderDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [folder, setFolder] = useState<FolderType | null>(null);
+  const [folderBreadcrumbs, setFolderBreadcrumbs] = useState<FolderType[]>([]);
   const [subfolders, setSubfolders] = useState<SubFolder[]>([]);
   const [files, setFiles] = useState<FileType[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -95,7 +96,7 @@ const FolderDetail = () => {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [showUploadPanel, setShowUploadPanel] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [viewMode, setViewMode] = useKnowledgeViewMode();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const dragDepthRef = useRef(0);
@@ -120,6 +121,30 @@ const FolderDetail = () => {
   const canRenameCurrentFolder = !!folder?.capabilities?.can_rename;
   const canDeleteCurrentFolder = !!folder?.capabilities?.can_delete;
 
+  const handleBackToParentFolder = useCallback(() => {
+    navigate(getKnowledgeFolderPath(folder?.parent_id), { replace: true });
+  }, [folder?.parent_id, navigate]);
+
+  const buildFolderBreadcrumbs = async (currentFolder: FolderType): Promise<FolderType[]> => {
+    const chain: FolderType[] = [currentFolder];
+    const visited = new Set<number>([currentFolder.id]);
+    let parentId = currentFolder.parent_id;
+
+    while (parentId && !visited.has(parentId)) {
+      visited.add(parentId);
+      try {
+        const response = await api.get<FolderType>(`/folders/${parentId}`);
+        chain.unshift(response.data);
+        parentId = response.data.parent_id;
+      } catch (error) {
+        console.error(`Failed to load parent folder ${parentId}`, error);
+        break;
+      }
+    }
+
+    return chain;
+  };
+
   const fetchFolderData = async () => {
     if (!id || fetching) return;
     setFetching(true);
@@ -129,9 +154,11 @@ const FolderDetail = () => {
         api.get(`/folders?parent_id=${id}`),
         api.get(`/files/folder/${id}`)
       ]);
-      setFolder(folderRes.data);
+      const currentFolder = folderRes.data as FolderType;
+      setFolder(currentFolder);
       setSubfolders(subfoldersRes.data);
       setFiles(filesRes.data);
+      setFolderBreadcrumbs(await buildFolderBreadcrumbs(currentFolder));
     } catch (error) {
       console.error('Failed to fetch folder data', error);
     } finally {
@@ -741,12 +768,44 @@ const FolderDetail = () => {
       <div className="flex shrink-0 flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-center gap-2 md:space-x-2">
           <button 
-            onClick={() => navigate(-1)}
-            className="p-2 hover:bg-slate-200 rounded-full transition-colors text-slate-500"
+            onClick={handleBackToParentFolder}
+            aria-label="返回上一级目录"
+            title="返回上一级目录"
+            className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-800"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <h1 className="min-w-0 flex-1 truncate text-xl font-bold tracking-tight text-slate-900 md:text-2xl">{folder.name}</h1>
+          <nav
+            aria-label="文件夹层级"
+            className="custom-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap py-1 text-sm text-slate-500 md:gap-2"
+          >
+            {(folderBreadcrumbs.length > 0 ? folderBreadcrumbs : [folder]).map((item, index, trail) => {
+              const isCurrent = index === trail.length - 1;
+              return (
+                <React.Fragment key={item.id}>
+                  {index > 0 ? <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" /> : null}
+                  {isCurrent ? (
+                    <span
+                      aria-current="page"
+                      className="max-w-[220px] shrink-0 truncate rounded-full bg-slate-100 px-3 py-1.5 font-semibold text-slate-800 md:max-w-[320px]"
+                      title={item.name}
+                    >
+                      {item.name}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => navigate(getKnowledgeFolderPath(item.id), { replace: true })}
+                      className="max-w-[200px] shrink-0 truncate rounded-full px-3 py-1.5 transition-colors hover:bg-slate-100 hover:text-slate-700 md:max-w-[280px]"
+                      title={`进入 ${item.name}`}
+                    >
+                      {item.name}
+                    </button>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </nav>
           <FavoriteButton
             active={favoriteFolderIds.has(folder.id)}
             title={favoriteFolderIds.has(folder.id) ? '取消收藏当前文件夹' : '收藏当前文件夹'}

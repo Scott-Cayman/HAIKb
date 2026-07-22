@@ -6,14 +6,22 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models.document_summary import DocumentSummary
 from app.models.file import File
 from app.services.summary_index_service import summary_index_service
 
 
-MAX_BATCH_SECONDS = 300
 MAX_RETRY_ATTEMPTS = 3
+
+
+def _batch_timeout_seconds(file_count: int) -> int:
+    estimated = max(1, file_count) * settings.SUMMARY_BATCH_PER_FILE_TIMEOUT_SECONDS
+    return min(
+        settings.SUMMARY_BATCH_MAX_TIMEOUT_SECONDS,
+        max(settings.SUMMARY_BATCH_BASE_TIMEOUT_SECONDS, estimated),
+    )
 
 
 @dataclass
@@ -25,6 +33,7 @@ class BatchSummaryTask:
     file_ids: List[int]
     created_at: float
     deadline_at: float
+    timeout_seconds: int
     status: str = "running"
     message: Optional[str] = None
     processing_file_id: Optional[int] = None
@@ -67,13 +76,15 @@ class BatchSummaryService:
 
         task_id = str(uuid.uuid4())
         now = time.time()
+        timeout_seconds = _batch_timeout_seconds(len(normalized_ids))
         task = BatchSummaryTask(
             task_id=task_id,
             owner_user_id=owner_user_id,
             file_ids=normalized_ids,
             pending_file_ids=list(normalized_ids),
             created_at=now,
-            deadline_at=now + MAX_BATCH_SECONDS,
+            deadline_at=now + timeout_seconds,
+            timeout_seconds=timeout_seconds,
         )
         with self._lock:
             self._tasks[task_id] = task
@@ -269,7 +280,7 @@ class BatchSummaryService:
             "pending_count": pending_count,
             "processing_file_id": task.processing_file_id,
             "elapsed_seconds": elapsed_seconds,
-            "timeout_seconds": MAX_BATCH_SECONDS,
+            "timeout_seconds": task.timeout_seconds,
             "retry_attempts": task.attempts,
             "failed_file_ids": task.failed_file_ids,
             "success_file_ids": task.success_file_ids,

@@ -77,6 +77,13 @@ class Settings(BaseSettings):
     EMBEDDING_BATCH_SIZE: int = 8
     EMBEDDING_TIMEOUT_SECONDS: int = 180
 
+    # Summary generation and embedding share the same local model server.
+    # Keep one file in flight per backend process to avoid model timeouts.
+    SUMMARY_WORKER_CONCURRENCY: int = 1
+    SUMMARY_BATCH_BASE_TIMEOUT_SECONDS: int = 300
+    SUMMARY_BATCH_PER_FILE_TIMEOUT_SECONDS: int = 300
+    SUMMARY_BATCH_MAX_TIMEOUT_SECONDS: int = 6 * 60 * 60
+
     PRESET_RERANKER_ENABLED: bool = False
     PRESET_RERANKER_MODEL: str = 'dengcao/Qwen3-Reranker-8B:Q8_0'
     PRESET_RERANKER_TIMEOUT_SECONDS: int = 8

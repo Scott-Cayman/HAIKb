@@ -30,6 +30,7 @@ build/
 
 # 测试文件
 test_*.py
+!backend/tests/test_*.py
 test_*.xlsx
 create_excel.py
 

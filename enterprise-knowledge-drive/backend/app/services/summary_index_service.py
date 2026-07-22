@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import logging
+from threading import BoundedSemaphore
 
 from app.config import settings
 from app.database import SessionLocal
@@ -13,12 +14,17 @@ from app.services.summary_generator import summary_generator_service
 from app.services.folder_summary_service import folder_summary_service
 
 logger = logging.getLogger(__name__)
+_summary_worker_slots = BoundedSemaphore(max(1, settings.SUMMARY_WORKER_CONCURRENCY))
 
 
 class SummaryIndexService:
     """串起解析、总结、落盘、索引四个步骤。"""
 
     def summarize_file(self, file_id: int, reindex: bool = True) -> dict:
+        with _summary_worker_slots:
+            return self._summarize_file_unlocked(file_id=file_id, reindex=reindex)
+
+    def _summarize_file_unlocked(self, file_id: int, reindex: bool = True) -> dict:
         logger.info(f"Starting summarize_file for file ID: {file_id}")
         folder_id = None
         
@@ -52,7 +58,14 @@ class SummaryIndexService:
                 db.commit()
                 raise
 
-            summary_payload = summary_generator_service.generate_summary(file=file, parsed=parsed)
+            try:
+                summary_payload = summary_generator_service.generate_summary(file=file, parsed=parsed)
+            except Exception as exc:
+                logger.exception(f"Error generating summary: {str(exc)}")
+                file.summary_status = "failed"
+                file.summary_error = str(exc)
+                db.commit()
+                raise
             summary_file_path = self._write_summary_markdown(file.id, summary_payload["summary_markdown"])
             summary = db.query(DocumentSummary).filter(DocumentSummary.file_id == file.id).first()
             if not summary:
