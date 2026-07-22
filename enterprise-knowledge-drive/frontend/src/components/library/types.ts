@@ -1,4 +1,5 @@
 import type { MouseEvent, ReactNode } from 'react';
+import type { MovableResource } from '../../services/resourceMove';
 
 export type CollectionViewMode = 'list' | 'grid';
 
@@ -44,4 +45,10 @@ export type CollectionItem = {
   iconBgFrom?: string | null;
   iconBgTo?: string | null;
   iconColor?: string | null;
+  move?: {
+    resource: MovableResource;
+    enabled: boolean;
+    canAcceptDrop?: boolean;
+    onDrop?: (resource: MovableResource, targetFolderId: number) => void;
+  };
 };

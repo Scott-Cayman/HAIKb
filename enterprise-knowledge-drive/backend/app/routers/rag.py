@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -16,8 +16,9 @@ from app.models.rag_index import RagIndex, RagSource, SummaryChunk
 from app.models.user import User
 from app.rag.index_manager import index_manager
 from app.services.batch_summary_service import batch_summary_service
+from app.services.audit_log_service import record_audit_log
+from app.services.folder_summary_service import folder_summary_service
 from app.services.resource_access import get_file_capabilities
-from app.services.summary_generator import summary_generator_service
 from app.services.summary_index_service import summary_index_service
 
 
@@ -45,7 +46,8 @@ def _get_file_for_capability(
 
 
 class ManualSummaryRequest(BaseModel):
-    summary_text: str
+    summary_text: str = Field(max_length=20_000)
+    one_line_judgement: Optional[str] = Field(default=None, max_length=500)
 
 
 class SummaryTagUpdateRequest(BaseModel):
@@ -59,6 +61,73 @@ class SummaryTagUpdateRequest(BaseModel):
 
 class BatchSummaryRequest(BaseModel):
     file_ids: List[int]
+
+
+def _manual_tag_list(raw_value: Optional[str]) -> str:
+    if not raw_value:
+        return "[]"
+    try:
+        parsed = json.loads(raw_value)
+    except (TypeError, json.JSONDecodeError):
+        parsed = [item.strip() for item in raw_value.split(",") if item.strip()]
+    if not isinstance(parsed, list):
+        return "[]"
+    return json.dumps([str(item).strip() for item in parsed if str(item).strip()], ensure_ascii=False)
+
+
+def _build_manual_summary_markdown(
+    file: File,
+    summary_text: str,
+    one_line_judgement: str,
+    existing_summary: Optional[DocumentSummary] = None,
+) -> str:
+    client_type = (existing_summary.client_type if existing_summary else None) or "未识别"
+    project_type = (existing_summary.project_type if existing_summary else None) or "未识别"
+    document_type = (existing_summary.document_type if existing_summary else None) or "手动总结"
+    industry_tags = _manual_tag_list(existing_summary.industry_tags if existing_summary else None)
+    region_tags = _manual_tag_list(existing_summary.region_tags if existing_summary else None)
+    keyword_tags = _manual_tag_list(existing_summary.keyword_tags if existing_summary else None)
+
+    return f"""# AI_DOCUMENT_SUMMARY
+
+## 0. 机器可读元数据
+- file_id: {file.id}
+- original_name: {file.original_name}
+- document_type: {document_type}
+- parse_scope: manual
+- parse_pages: 0
+- parse_confidence: manual
+
+## 1. 文件一句话判断
+{one_line_judgement}
+
+## 2. 两句话简介
+{summary_text}
+
+## 3. 标签
+- 客户类型：{client_type}
+- 项目类型：{project_type}
+- 文件类型：{document_type}
+- 行业标签：{industry_tags}
+- 区域标签：{region_tags}
+- 关键词标签：{keyword_tags}
+
+## 4. 重要信息摘要
+{summary_text}
+
+## 5. 可复用价值
+该文件包含用户手动编写的总结，可用于企业知识检索。
+
+## 6. 适合被以下问题检索到
+- 查找 {file.original_name}
+- 查找与“{one_line_judgement}”相关的内容
+
+## 7. 检索关键词扩展
+{file.original_name}、{one_line_judgement}
+
+## 8. 解析限制
+本总结由用户手动编写，未经 AI 自动解析。
+"""
 
 
 @router.get("/indices")
@@ -223,94 +292,77 @@ def save_manual_summary(
     file_id: int,
     payload: ManualSummaryRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """手动保存总结（用于视频等不支持自动解析的格式）"""
     file = _get_file_for_capability(db, file_id, current_user, "can_edit")
 
-    if not payload.summary_text.strip():
+    summary_text = payload.summary_text.strip()
+    if not summary_text:
         raise HTTPException(status_code=400, detail="总结内容不能为空")
-
-    # 将用户输入包装成标准 summary markdown 格式
-    markdown = f"""# AI_DOCUMENT_SUMMARY
-
-## 0. 机器可读元数据
-- file_id: {file.id}
-- original_name: {file.original_name}
-- document_type: 手动总结
-- parse_scope: manual
-- parse_pages: 0
-- parse_confidence: manual
-
-## 1. 文件一句话判断
-{payload.summary_text.strip().splitlines()[0][:200]}
-
-## 2. 两句话简介
-{payload.summary_text.strip()}
-
-## 3. 标签
-- 客户类型：未识别
-- 项目类型：未识别
-- 文件类型：手动总结
-- 行业标签：[]
-- 区域标签：[]
-- 关键词标签：[]
-
-## 4. 重要信息摘要
-（由用户手动填写，见上方简介）
-
-## 5. 可复用价值
-该文件包含用户手动编写的总结，可用于企业知识检索。
-
-## 6. 适合被以下问题检索到
-- 查找 {file.original_name}
-
-## 7. 检索关键词扩展
-{file.original_name}
-
-## 8. 解析限制
-本总结由用户手动编写，未经 AI 自动解析。
-"""
-
-    # 写入磁盘
-    summary_file_path = summary_index_service._write_summary_markdown(file.id, markdown)
-
-    # 提取结构化字段
-    fields = summary_generator_service.extract_structured_fields(markdown)
 
     # 更新或创建 DocumentSummary 记录
     summary = db.query(DocumentSummary).filter(DocumentSummary.file_id == file.id).first()
+    was_created = summary is None
     if not summary:
         summary = DocumentSummary(file_id=file.id, summary_markdown="")
         db.add(summary)
         db.flush()
 
+    requested_one_line = (payload.one_line_judgement or "").strip()
+    fallback_one_line = next((line.strip() for line in summary_text.splitlines() if line.strip()), "")
+    one_line_judgement = requested_one_line or fallback_one_line[:500]
+    if not one_line_judgement:
+        raise HTTPException(status_code=400, detail="一句话判断不能为空")
+
+    markdown = _build_manual_summary_markdown(
+        file=file,
+        summary_text=summary_text,
+        one_line_judgement=one_line_judgement,
+        existing_summary=None if was_created else summary,
+    )
+    summary_file_path = summary_index_service._write_summary_markdown(file.id, markdown)
+
     summary.summary_markdown = markdown
     summary.summary_file_path = str(summary_file_path)
-    summary.one_line_judgement = fields.get("one_line_judgement")
-    summary.two_sentence_intro = fields.get("two_sentence_intro")
-    summary.client_type = fields.get("client_type")
-    summary.project_type = fields.get("project_type")
-    summary.document_type = fields.get("document_type")
-    summary.region_tags = fields.get("region_tags")
-    summary.industry_tags = fields.get("industry_tags")
-    summary.keyword_tags = fields.get("keyword_tags")
+    summary.one_line_judgement = one_line_judgement
+    summary.two_sentence_intro = summary_text
+    if was_created:
+        summary.client_type = "未识别"
+        summary.project_type = "未识别"
+        summary.document_type = "手动总结"
+        summary.region_tags = "[]"
+        summary.industry_tags = "[]"
+        summary.keyword_tags = "[]"
     summary.parse_pages = 0
     summary.parse_status = "manual"
     summary.parse_confidence = "manual"
     summary.parse_error = None
     summary.index_status = "pending"
     summary.index_error = None
+    file.summary_status = "success"
+    file.summary_error = None
+    summary.is_deleted = False
+    record_audit_log(
+        db,
+        current_user,
+        "summary.manual.create" if was_created else "summary.manual.update",
+        "file",
+        file.id,
+        request=request,
+        detail={
+            "summary_id": summary.id,
+            "one_line_judgement": one_line_judgement,
+            "summary_length": len(summary_text),
+        },
+    )
     db.commit()
     db.refresh(summary)
 
-    # 更新文件状态
-    file.summary_status = "success"
-    file.summary_error = None
-    db.commit()
-
     summary_id = summary.id
+    folder_id = file.folder_id
 
     # 后台索引
     def _index_task():
@@ -319,6 +371,11 @@ def save_manual_summary(
             index = index_manager.get_default_index()
             pipeline = index.get_indexing_pipeline(settings={"retrieval_mode": "hybrid"})
             pipeline.run(summary_id, reindex=True)
+            if folder_id:
+                try:
+                    folder_summary_service.update_folder_summary(folder_id)
+                except Exception:
+                    pass
         except Exception as exc:
             with SL() as bg_db:
                 bg_summary = bg_db.query(DocumentSummary).filter(DocumentSummary.id == summary_id).first()

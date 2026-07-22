@@ -5,6 +5,7 @@ export type ResourceCapabilities = {
   can_download: boolean;
   can_edit: boolean;
   can_rename: boolean;
+  can_move: boolean;
   can_delete: boolean;
   can_upload: boolean;
   can_manage_settings: boolean;

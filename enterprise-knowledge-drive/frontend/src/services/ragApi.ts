@@ -108,9 +108,10 @@ export const ragApi = {
     const response = await api.put<FileSummaryResponse>(`/rag/files/${fileId}/tags`, payload);
     return response.data;
   },
-  saveManualSummary: async (fileId: number, summaryText: string) => {
+  saveManualSummary: async (fileId: number, summaryText: string, oneLineJudgement?: string) => {
     const response = await api.post<FileSummaryResponse>(`/rag/files/${fileId}/manual-summary`, {
       summary_text: summaryText,
+      one_line_judgement: oneLineJudgement,
     });
     return response.data;
   },

@@ -1,10 +1,12 @@
 import { Folder, Grid2X2, List } from 'lucide-react';
+import { useRef, useState, type DragEvent, type MouseEvent } from 'react';
 
 import FavoriteButton from '../FavoriteButton';
 import FileIconBadge from '../files/FileIconBadge';
 import FilePreviewThumbnail from '../files/FilePreviewThumbnail';
 import FolderIconBadge from '../folders/FolderIconBadge';
 import type { CollectionItem, CollectionStatusTone, CollectionViewMode } from './types';
+import { hasResourceDragData, readResourceDragData, writeResourceDragData } from '../../services/resourceMove';
 
 type SortableHeaderConfig = {
   label: string;
@@ -47,7 +49,7 @@ const getStatusClassName = (tone: CollectionStatusTone = 'neutral') => {
   return 'bg-slate-100 text-slate-500';
 };
 
-const getFavoriteButtonVisibility = (_active: boolean) => 'opacity-100';
+const getFavoriteButtonVisibility = () => 'opacity-100';
 
 const inferFileExt = (fileName: string) => {
   const dotIndex = fileName.lastIndexOf('.');
@@ -184,7 +186,7 @@ const ItemActions = ({
         <FavoriteButton
           active={item.favorite.active}
           title={item.favorite.title}
-          className={`${compact ? 'h-8 w-8 rounded-full' : 'h-9 w-9 rounded-full'} ${getFavoriteButtonVisibility(item.favorite.active)}`}
+          className={`${compact ? 'h-8 w-8 rounded-full' : 'h-9 w-9 rounded-full'} ${getFavoriteButtonVisibility()}`}
           onClick={item.favorite.onClick}
         />
       ) : null}
@@ -206,15 +208,98 @@ const ItemActions = ({
   );
 };
 
+const useCollectionItemDrag = (item: CollectionItem) => {
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDropActive, setIsDropActive] = useState(false);
+  const suppressOpenRef = useRef(false);
+  const move = item.move;
+  const draggable = !!move?.enabled;
+  const canAcceptDrop = item.kind === 'folder' && !!move?.canAcceptDrop && !!move.onDrop;
+
+  const onClick = (event: MouseEvent<HTMLElement>) => {
+    if (suppressOpenRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    item.onOpen();
+  };
+
+  const onDragStart = (event: DragEvent<HTMLElement>) => {
+    if (!draggable || !move) {
+      event.preventDefault();
+      return;
+    }
+    writeResourceDragData(event.dataTransfer, move.resource);
+    setIsDragging(true);
+    suppressOpenRef.current = true;
+  };
+
+  const onDragEnd = () => {
+    setIsDragging(false);
+    setIsDropActive(false);
+    window.setTimeout(() => {
+      suppressOpenRef.current = false;
+    }, 0);
+  };
+
+  const onDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!canAcceptDrop || !hasResourceDragData(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'move';
+    setIsDropActive(true);
+  };
+
+  const onDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setIsDropActive(false);
+  };
+
+  const onDrop = (event: DragEvent<HTMLElement>) => {
+    if (!canAcceptDrop || !hasResourceDragData(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDropActive(false);
+    const source = readResourceDragData(event.dataTransfer);
+    if (!source || (source.kind === 'folder' && source.id === Number(item.id))) return;
+    move?.onDrop?.(source, Number(item.id));
+  };
+
+  return {
+    draggable,
+    isDragging,
+    isDropActive,
+    onClick,
+    onDragStart,
+    onDragEnd,
+    onDragOver,
+    onDragLeave,
+    onDrop,
+  };
+};
+
 const GridCard = ({ item }: { item: CollectionItem }) => {
   const footerDate = item.dateLabel || null;
   const footerSize = item.sizeLabel || null;
+  const drag = useCollectionItemDrag(item);
 
   return (
     <div
-      onClick={item.onOpen}
-      className="group cursor-pointer rounded-[20px] border border-slate-100 bg-white p-3 transition-all hover:-translate-y-px hover:border-[#d9ece8] hover:shadow-[0_7px_16px_rgba(178,200,220,0.1)]"
+      draggable={drag.draggable}
+      onClick={drag.onClick}
+      onDragStart={drag.onDragStart}
+      onDragEnd={drag.onDragEnd}
+      onDragOver={drag.onDragOver}
+      onDragLeave={drag.onDragLeave}
+      onDrop={drag.onDrop}
+      className={`group cursor-pointer rounded-[20px] border bg-white p-3 transition-all hover:-translate-y-px hover:shadow-[0_7px_16px_rgba(178,200,220,0.1)] ${
+        drag.isDropActive
+          ? 'border-[#43c9bb] bg-[#effcf9] ring-2 ring-[#b9eee7]'
+          : 'border-slate-100 hover:border-[#d9ece8]'
+      } ${drag.isDragging ? 'opacity-45' : ''} ${drag.draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
     >
+      {drag.isDropActive ? <div className="mb-2 rounded-lg bg-[#dff8f3] px-2 py-1 text-center text-xs font-medium text-[#168f83]">移动到此文件夹</div> : null}
       {item.kind === 'folder' ? (
         <div className="relative mb-3 flex h-[104px] items-center justify-center rounded-[18px]">
           <ItemVisual item={item} />
@@ -223,7 +308,7 @@ const GridCard = ({ item }: { item: CollectionItem }) => {
               <FavoriteButton
                 active={item.favorite.active}
                 title={item.favorite.title}
-                className={`h-8 w-8 rounded-full ${getFavoriteButtonVisibility(item.favorite.active)}`}
+                className={`h-8 w-8 rounded-full ${getFavoriteButtonVisibility()}`}
                 onClick={item.favorite.onClick}
               />
             </div>
@@ -237,7 +322,7 @@ const GridCard = ({ item }: { item: CollectionItem }) => {
               <FavoriteButton
                 active={item.favorite.active}
                 title={item.favorite.title}
-                className={`h-8 w-8 rounded-full ${getFavoriteButtonVisibility(item.favorite.active)}`}
+                className={`h-8 w-8 rounded-full ${getFavoriteButtonVisibility()}`}
                 onClick={item.favorite.onClick}
               />
             </div>
@@ -287,8 +372,19 @@ const ListRow = ({
   showSizeColumn: boolean;
   showStatusColumn: boolean;
   showDateColumn: boolean;
-}) => (
-  <tr onClick={item.onOpen} className="group cursor-pointer transition-colors hover:bg-[#fbfefe]">
+}) => {
+  const drag = useCollectionItemDrag(item);
+  return (
+  <tr
+    draggable={drag.draggable}
+    onClick={drag.onClick}
+    onDragStart={drag.onDragStart}
+    onDragEnd={drag.onDragEnd}
+    onDragOver={drag.onDragOver}
+    onDragLeave={drag.onDragLeave}
+    onDrop={drag.onDrop}
+    className={`group cursor-pointer transition-colors ${drag.isDropActive ? 'bg-[#e9fbf7] ring-1 ring-inset ring-[#6dd8cc]' : 'hover:bg-[#fbfefe]'} ${drag.isDragging ? 'opacity-45' : ''} ${drag.draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
+  >
     <td className="px-5 py-3 align-middle">
       <div className="flex items-center justify-start gap-3">
         <ItemVisual item={item} listMode />
@@ -333,7 +429,8 @@ const ListRow = ({
       </div>
     </td>
   </tr>
-);
+  );
+};
 
 const resolveColumn = (
   config: ColumnConfig | undefined,

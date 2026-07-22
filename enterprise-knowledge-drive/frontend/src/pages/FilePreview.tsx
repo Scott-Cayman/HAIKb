@@ -8,6 +8,7 @@ import {
   FileText,
   Loader2,
   Maximize2,
+  PencilLine,
   RefreshCcw,
   Rows,
   Columns,
@@ -62,6 +63,7 @@ interface FileDetail {
     can_download: boolean;
     can_edit: boolean;
     can_rename: boolean;
+    can_move: boolean;
     can_delete: boolean;
     can_upload: boolean;
     can_manage_settings: boolean;
@@ -1323,6 +1325,7 @@ const FilePreview = () => {
   const [summaryData, setSummaryData] = useState<any>(null);
   const [summaryActionLoading, setSummaryActionLoading] = useState(false);
   const [manualSummaryOpen, setManualSummaryOpen] = useState(false);
+  const [manualSummaryOneLine, setManualSummaryOneLine] = useState('');
   const [manualSummaryText, setManualSummaryText] = useState('');
   const [manualSummarySaving, setManualSummarySaving] = useState(false);
   const [tagEditorOpen, setTagEditorOpen] = useState(false);
@@ -1549,20 +1552,40 @@ const FilePreview = () => {
 
   // 保存手动编写的总结（用于视频等不支持自动解析的格式）
   const handleSaveManualSummary = async () => {
-    if (!id || !manualSummaryText.trim()) return;
+    if (!id || !manualSummaryOneLine.trim() || !manualSummaryText.trim()) return;
     setManualSummarySaving(true);
     setSummaryLoading(true);
     try {
-      await ragApi.saveManualSummary(Number(id), manualSummaryText.trim());
+      const response = await ragApi.saveManualSummary(
+        Number(id),
+        manualSummaryText.trim(),
+        manualSummaryOneLine.trim(),
+      );
+      setSummaryData(response);
       setManualSummaryOpen(false);
+      setManualSummaryOneLine('');
       setManualSummaryText('');
-      setPollTrigger(p => p + 1);
     } catch (err) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       alert((err as any)?.response?.data?.detail || '保存失败');
     } finally {
       setManualSummarySaving(false);
+      setSummaryLoading(false);
     }
+  };
+
+  const openManualSummaryEditor = () => {
+    const currentSummary = summaryData?.summary;
+    setManualSummaryOneLine(currentSummary?.one_line_judgement || '');
+    setManualSummaryText(currentSummary?.two_sentence_intro || '');
+    setManualSummaryOpen(true);
+  };
+
+  const closeManualSummaryEditor = () => {
+    if (manualSummarySaving) return;
+    setManualSummaryOpen(false);
+    setManualSummaryOneLine('');
+    setManualSummaryText('');
   };
 
   const renderPreview = () => {
@@ -1673,6 +1696,8 @@ const FilePreview = () => {
   };
 
   const summary = summaryData?.summary;
+  const isVideoFile = !!file && VIDEO_EXTS.has(normalizedFileExtension(file));
+  const canEditManualSummary = isVideoFile && !!file?.capabilities?.can_edit;
 
   const currentRegionTags = useMemo(() => parseTagTokens(summary?.region_tags), [summary?.region_tags]);
   const currentIndustryTags = useMemo(() => parseTagTokens(summary?.industry_tags), [summary?.industry_tags]);
@@ -1775,6 +1800,57 @@ const FilePreview = () => {
     }
   };
 
+  const manualSummaryEditor = (
+    <div className="space-y-3 rounded-2xl border border-amber-100 bg-amber-50/50 p-3">
+      <div className="text-xs leading-5 text-amber-700">
+        视频总结由您手动维护。保存后会自动更新 AI 检索索引，并保留已设置的标签。
+      </div>
+      <label className="block space-y-1.5">
+        <span className="text-xs font-medium text-slate-600">一句话判断</span>
+        <input
+          value={manualSummaryOneLine}
+          onChange={(event) => setManualSummaryOneLine(event.target.value)}
+          maxLength={500}
+          placeholder="例如：这是一段介绍 AI 悖论及应用思考的视频"
+          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20"
+        />
+      </label>
+      <label className="block space-y-1.5">
+        <span className="text-xs font-medium text-slate-600">总结正文</span>
+        <textarea
+          value={manualSummaryText}
+          onChange={(event) => setManualSummaryText(event.target.value)}
+          maxLength={20000}
+          placeholder="请输入视频的核心内容、重要信息、结论和适合检索的关键词……"
+          rows={8}
+          className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm leading-6 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20"
+        />
+      </label>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] text-slate-400">{manualSummaryText.length}/20000</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={closeManualSummaryEditor}
+            disabled={manualSummarySaving}
+            className="rounded-xl bg-white px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 disabled:opacity-60"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSaveManualSummary()}
+            disabled={manualSummarySaving || !manualSummaryOneLine.trim() || !manualSummaryText.trim()}
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {manualSummarySaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {manualSummarySaving ? '保存中...' : summary ? '保存修改并更新索引' : '保存并建立索引'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="flex min-h-full flex-col space-y-3 md:h-[calc(100vh-8rem)] md:min-h-0 md:space-y-4">
       <div className="flex flex-col gap-3 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between md:p-4">
@@ -1832,14 +1908,27 @@ const FilePreview = () => {
               <FileText className="w-5 h-5 text-blue-500" />
               <h2 className="text-lg font-bold text-slate-900">AI 总结</h2>
             </div>
-            <button
-              onClick={() => handleSummaryAction(summary ? 'reindex' : 'summarize')}
-              disabled={summaryActionLoading}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm transition-colors disabled:opacity-60"
-            >
-              {summaryActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
-              {summary ? '重新索引' : '生成总结'}
-            </button>
+            {isVideoFile ? (
+              canEditManualSummary && !manualSummaryOpen ? (
+                <button
+                  type="button"
+                  onClick={openManualSummaryEditor}
+                  className="inline-flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-700 transition-colors hover:bg-amber-100"
+                >
+                  <PencilLine className="h-4 w-4" />
+                  {summary ? '修改总结' : '手动编写'}
+                </button>
+              ) : null
+            ) : (
+              <button
+                onClick={() => handleSummaryAction(summary ? 'reindex' : 'summarize')}
+                disabled={summaryActionLoading}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm transition-colors disabled:opacity-60"
+              >
+                {summaryActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
+                {summary ? '重新索引' : '生成总结'}
+              </button>
+            )}
           </div>
 
           {summaryLoading ? (
@@ -1848,7 +1937,7 @@ const FilePreview = () => {
               <span>AI 总结加载中...</span>
             </div>
           ) : summary ? (
-            <>
+            manualSummaryOpen ? manualSummaryEditor : <>
               <section>
                 <div className="text-xs text-slate-400 mb-2">一句话判断</div>
                 <p className="text-sm text-slate-700 leading-7">{summary.one_line_judgement || '未生成'}</p>
@@ -1856,7 +1945,7 @@ const FilePreview = () => {
 
               <section>
                 <div className="text-xs text-slate-400 mb-2">两句话简介</div>
-                <p className="text-sm text-slate-700 leading-7">{summary.two_sentence_intro || '未生成'}</p>
+                <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{summary.two_sentence_intro || '未生成'}</p>
               </section>
 
               <section>
@@ -1978,48 +2067,16 @@ const FilePreview = () => {
               <p className="text-sm text-slate-500">AI 总结暂未生成。</p>
               {summaryData?.summary_error ? <p className="text-sm text-red-500">{summaryData.summary_error}</p> : null}
 
-              {/* 手动编写总结（用于视频等不支持自动解析的格式） */}
-              {isAdmin && !manualSummaryOpen && (
+              {canEditManualSummary && !manualSummaryOpen && (
                 <button
-                  onClick={() => setManualSummaryOpen(true)}
+                  onClick={openManualSummaryEditor}
                   className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 text-sm transition-colors"
                 >
-                  <Save className="w-4 h-4" />
+                  <PencilLine className="w-4 h-4" />
                   手动编写总结
                 </button>
               )}
-
-              {manualSummaryOpen && (
-                <div className="space-y-3">
-                  <div className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">
-                    该文件格式不支持 AI 自动解析，您可以手动编写总结内容，保存后将自动被索引用于 AI 检索。
-                  </div>
-                  <textarea
-                    value={manualSummaryText}
-                    onChange={(e) => setManualSummaryText(e.target.value)}
-                    placeholder="请输入该文件的总结内容，例如：这是一段关于 XX 项目的会议录像，主要讨论了项目进度和交付要求..."
-                    rows={6}
-                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/30 text-sm resize-y"
-                  />
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={handleSaveManualSummary}
-                      disabled={manualSummarySaving || !manualSummaryText.trim()}
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm transition-colors disabled:opacity-60"
-                    >
-                      {manualSummarySaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                      {manualSummarySaving ? '保存中...' : '保存并索引'}
-                    </button>
-                    <button
-                      onClick={() => { setManualSummaryOpen(false); setManualSummaryText(''); }}
-                      disabled={manualSummarySaving}
-                      className="inline-flex items-center px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm transition-colors disabled:opacity-60"
-                    >
-                      取消
-                    </button>
-                  </div>
-                </div>
-              )}
+              {manualSummaryOpen ? manualSummaryEditor : null}
             </div>
           )}
         </aside>

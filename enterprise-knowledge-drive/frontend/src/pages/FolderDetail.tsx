@@ -1,16 +1,18 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, File, Upload, UploadCloud, MoreVertical, CheckCircle, XCircle, Loader2, Folder, PencilLine, Trash2, X, Settings2, Sparkles } from 'lucide-react';
+import { ArrowLeft, ChevronRight, File, Upload, UploadCloud, MoreVertical, CheckCircle, XCircle, Loader2, Folder, FolderInput, PencilLine, Trash2, X, Settings2, Sparkles } from 'lucide-react';
 import api from '../services/api';
 import { ragApi, type BatchSummaryTaskResponse } from '../services/ragApi';
 import { getKnowledgeFolderPath } from '../services/knowledgeNavigation';
 import FavoriteButton from '../components/FavoriteButton';
 import InlineItemMenu from '../components/library/InlineItemMenu';
 import LibraryItemsView from '../components/library/LibraryItemsView';
+import MoveResourceDialog from '../components/library/MoveResourceDialog';
 import type { CollectionItem } from '../components/library/types';
 import { useFavoriteStatus } from '../hooks/useFavoriteStatus';
 import { useKnowledgeViewMode } from '../hooks/useKnowledgeViewMode';
 import { formatDate, formatSize } from '../utils';
+import { isExternalFileDrag, type MovableResource } from '../services/resourceMove';
 import {
   collectDroppedUpload,
   createUploadCandidates,
@@ -22,6 +24,7 @@ type ResourceCapabilities = {
   can_download: boolean;
   can_edit: boolean;
   can_rename: boolean;
+  can_move: boolean;
   can_delete: boolean;
   can_upload: boolean;
   can_manage_settings: boolean;
@@ -104,6 +107,8 @@ const FolderDetail = () => {
   const [renameTarget, setRenameTarget] = useState<ActionTarget | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deleteTarget, setDeleteTarget] = useState<ActionTarget | null>(null);
+  const [moveTarget, setMoveTarget] = useState<MovableResource | null>(null);
+  const [moveInitialFolderId, setMoveInitialFolderId] = useState<number | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [summaryTask, setSummaryTask] = useState<BatchSummaryTaskResponse | null>(null);
   const summaryPollTimerRef = useRef<number | null>(null);
@@ -214,6 +219,16 @@ const FolderDetail = () => {
     setRenameValue(target.name);
   };
 
+  const openMoveDialog = (target: MovableResource, initialTargetFolderId?: number) => {
+    setOpenMenuKey(null);
+    setMoveTarget(target);
+    setMoveInitialFolderId(initialTargetFolderId ?? null);
+  };
+
+  const handleMoved = async () => {
+    await fetchFolderData();
+  };
+
   const openDeleteDialog = (target: ActionTarget) => {
     setOpenMenuKey(null);
     setDeleteTarget(target);
@@ -316,11 +331,8 @@ const FolderDetail = () => {
     });
   }, [id]);
 
-  const isFileDrag = (event: React.DragEvent<HTMLDivElement>) =>
-    Array.from(event.dataTransfer.types).includes('Files');
-
   const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!isFileDrag(event)) return;
+    if (!isExternalFileDrag(event.dataTransfer)) return;
     event.preventDefault();
     dragDepthRef.current += 1;
     if (canUploadToCurrentFolder && !isUploading && !isSummaryRunning) {
@@ -329,20 +341,20 @@ const FolderDetail = () => {
   };
 
   const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!isFileDrag(event)) return;
+    if (!isExternalFileDrag(event.dataTransfer)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = canUploadToCurrentFolder && !isUploading && !isSummaryRunning ? 'copy' : 'none';
   };
 
   const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!isFileDrag(event)) return;
+    if (!isExternalFileDrag(event.dataTransfer)) return;
     event.preventDefault();
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
     if (dragDepthRef.current === 0) setIsDragActive(false);
   };
 
   const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
-    if (!isFileDrag(event)) return;
+    if (!isExternalFileDrag(event.dataTransfer)) return;
     event.preventDefault();
     dragDepthRef.current = 0;
     setIsDragActive(false);
@@ -670,7 +682,13 @@ const FolderDetail = () => {
         title: favoriteFolderIds.has(subfolder.id) ? '取消收藏文件夹' : '收藏文件夹',
         onClick: () => handleToggleFolderFavorite(subfolder.id),
       },
-      menu: subfolder.can_manage_settings ? (
+      move: {
+        resource: { kind: 'folder' as const, id: subfolder.id, name: subfolder.name },
+        enabled: !!subfolder.capabilities?.can_move,
+        canAcceptDrop: !!subfolder.capabilities?.can_upload,
+        onDrop: (resource: MovableResource, targetFolderId: number) => openMoveDialog(resource, targetFolderId),
+      },
+      menu: subfolder.can_manage_settings || subfolder.capabilities?.can_move || subfolder.capabilities?.can_delete ? (
         <div className="relative">
           <button
             type="button"
@@ -689,22 +707,36 @@ const FolderDetail = () => {
               onMouseDown={(event) => event.stopPropagation()}
               className={`absolute right-0 z-20 w-40 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_30px_rgba(188,199,220,0.25)] ${isLastItem ? 'bottom-full mb-1' : 'top-full mt-1'}`}
             >
-              <button
-                type="button"
-                onClick={() => navigate(`/folders/${subfolder.id}/settings`)}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
-              >
-                <PencilLine className="h-4 w-4 text-slate-500" />
-                编辑配置
-              </button>
-              <button
-                type="button"
-                onClick={() => openDeleteDialog({ kind: 'folder', id: subfolder.id, name: subfolder.name })}
-                className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4" />
-                删除
-              </button>
+              {subfolder.can_manage_settings ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/folders/${subfolder.id}/settings`)}
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  <PencilLine className="h-4 w-4 text-slate-500" />
+                  编辑配置
+                </button>
+              ) : null}
+              {subfolder.capabilities?.can_move ? (
+                <button
+                  type="button"
+                  onClick={() => openMoveDialog({ kind: 'folder', id: subfolder.id, name: subfolder.name })}
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-blue-600 hover:bg-blue-50"
+                >
+                  <FolderInput className="h-4 w-4" />
+                  移动到
+                </button>
+              ) : null}
+              {subfolder.capabilities?.can_delete ? (
+                <button
+                  type="button"
+                  onClick={() => openDeleteDialog({ kind: 'folder', id: subfolder.id, name: subfolder.name })}
+                  className="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  删除
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -729,13 +761,19 @@ const FolderDetail = () => {
         title: favoriteFileIds.has(file.id) ? '取消收藏文件' : '收藏文件',
         onClick: () => handleToggleFileFavorite(file.id),
       },
-      menu: file.capabilities?.can_rename || file.capabilities?.can_delete ? (
+      move: {
+        resource: { kind: 'file' as const, id: file.id, name: file.original_name },
+        enabled: !!file.capabilities?.can_move,
+      },
+      menu: file.capabilities?.can_rename || file.capabilities?.can_move || file.capabilities?.can_delete ? (
         <InlineItemMenu
           isOpen={openMenuKey === `file-${file.id}`}
           canRename={!!file.capabilities?.can_rename}
+          canMove={!!file.capabilities?.can_move}
           canDelete={!!file.capabilities?.can_delete}
           onToggle={() => setOpenMenuKey((prev) => (prev === `file-${file.id}` ? null : `file-${file.id}`))}
           onRename={() => openRenameDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
+          onMove={() => openMoveDialog({ kind: 'file', id: file.id, name: file.original_name })}
           onDelete={() => openDeleteDialog({ kind: 'file', id: file.id, name: file.original_name, size: file.size })}
         />
       ) : null,
@@ -1211,6 +1249,18 @@ const FolderDetail = () => {
           />
         )}
       </div>
+
+      {moveTarget ? (
+        <MoveResourceDialog
+          resource={moveTarget}
+          initialTargetFolderId={moveInitialFolderId}
+          onClose={() => {
+            setMoveTarget(null);
+            setMoveInitialFolderId(null);
+          }}
+          onMoved={handleMoved}
+        />
+      ) : null}
 
       {renameTarget ? (
         <div

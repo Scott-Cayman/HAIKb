@@ -48,6 +48,7 @@ class ResourceCapabilities:
     can_download: bool = False
     can_edit: bool = False
     can_rename: bool = False
+    can_move: bool = False
     can_delete: bool = False
     can_upload: bool = False
     can_manage_settings: bool = False
@@ -60,6 +61,7 @@ class ResourceCapabilities:
             "can_download": self.can_download,
             "can_edit": self.can_edit,
             "can_rename": self.can_rename,
+            "can_move": self.can_move,
             "can_delete": self.can_delete,
             "can_upload": self.can_upload,
             "can_manage_settings": self.can_manage_settings,
@@ -212,6 +214,7 @@ def get_folder_capabilities(db: Session, folder: Folder, user: User) -> Resource
             can_download=True,
             can_edit=True,
             can_rename=True,
+            can_move=True,
             can_delete=True,
             can_upload=True,
             can_manage_settings=True,
@@ -234,6 +237,7 @@ def get_folder_capabilities(db: Session, folder: Folder, user: User) -> Resource
             can_download=department_manage,
             can_edit=department_manage,
             can_rename=department_manage,
+            can_move=department_manage,
             can_delete=department_manage,
             can_upload=department_manage,
             can_manage_settings=department_manage,
@@ -263,6 +267,7 @@ def get_folder_capabilities(db: Session, folder: Folder, user: User) -> Resource
         can_download=can_download,
         can_edit=can_edit,
         can_rename=can_edit,
+        can_move=can_edit,
         can_delete=can_delete,
         can_upload=can_upload,
         can_manage_settings=False,
@@ -278,6 +283,7 @@ def get_file_capabilities(db: Session, file: File, user: User) -> ResourceCapabi
             can_download=True,
             can_edit=True,
             can_rename=True,
+            can_move=True,
             can_delete=True,
             can_manage_settings=True,
             can_manage_permissions=True,
@@ -311,6 +317,7 @@ def get_file_capabilities(db: Session, file: File, user: User) -> ResourceCapabi
             can_download=can_download,
             can_edit=can_edit,
             can_rename=can_edit,
+            can_move=can_edit,
             can_delete=can_edit,
             can_manage_settings=can_edit,
             can_manage_permissions=can_edit,
@@ -345,6 +352,7 @@ def get_file_capabilities(db: Session, file: File, user: User) -> ResourceCapabi
         can_download=can_download,
         can_edit=can_edit,
         can_rename=can_edit,
+        can_move=can_edit,
         can_delete=can_delete,
         can_manage_settings=False,
         can_manage_permissions=False,

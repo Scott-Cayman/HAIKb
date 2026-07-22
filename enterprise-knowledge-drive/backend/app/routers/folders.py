@@ -41,11 +41,20 @@ from app.services.resource_access import (
     SUBJECT_TYPE_ALL,
     SUBJECT_TYPE_ORG,
     SUBJECT_TYPE_USER,
+    get_file_capabilities,
     get_folder_capabilities,
     list_visible_folders,
 )
 from app.services.audit_log_service import record_audit_log
 from app.services.folder_summary_service import folder_summary_service
+from app.services.resource_move_service import (
+    ResourceMoveError,
+    build_folder_paths,
+    collect_descendant_folder_ids,
+    get_folder_root_id,
+    move_folder,
+    refresh_folder_summaries_after_move,
+)
 from app.services.upload_folder_service import (
     ensure_upload_folder_parts,
     normalize_upload_folder_parts,
@@ -225,6 +234,33 @@ class EnsureUploadFolderPathsResponse(BaseModel):
     created_folder_ids: List[int] = Field(default_factory=list)
     reused_folder_ids: List[int] = Field(default_factory=list)
     folder_ids_by_path: Dict[str, int] = Field(default_factory=dict)
+
+
+class ResourceMoveRequest(BaseModel):
+    target_folder_id: int
+
+
+class ResourceMoveResponse(BaseModel):
+    resource_type: str
+    resource_id: int
+    old_parent_id: int
+    target_folder_id: int
+    target_path: str
+
+
+class MoveTargetResponse(BaseModel):
+    id: int
+    name: str
+    parent_id: Optional[int]
+    path: str
+    depth: int
+    can_select: bool
+    disabled_reason: Optional[str] = None
+
+
+class MoveTargetsResponse(BaseModel):
+    root_folder_id: int
+    targets: List[MoveTargetResponse] = Field(default_factory=list)
 
 
 def _collect_descendant_folder_ids(db: Session, root_folder_id: int) -> List[int]:
@@ -784,6 +820,93 @@ def get_home_folder_context(
     return _build_home_folder_context(db, current_user, root_folder_id=root_folder_id)
 
 
+@router.get("/move-targets", response_model=MoveTargetsResponse)
+def get_move_targets(
+    resource_type: str,
+    resource_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if resource_type not in {"file", "folder"}:
+        raise HTTPException(status_code=400, detail="resource_type 必须是 file 或 folder")
+
+    excluded_folder_ids: Set[int] = set()
+    if resource_type == "folder":
+        resource_folder = db.query(Folder).filter(
+            Folder.id == resource_id,
+            Folder.is_deleted == False,
+        ).first()
+        if not resource_folder:
+            raise HTTPException(status_code=404, detail="文件夹不存在")
+        if resource_folder.parent_id is None:
+            raise HTTPException(status_code=400, detail="根目录不能移动")
+        if not get_folder_capabilities(db, resource_folder, current_user).can_move:
+            raise HTTPException(status_code=403, detail="您没有移动此文件夹的权限")
+        source_folder = resource_folder
+        current_parent_id = resource_folder.parent_id
+        excluded_folder_ids = set(collect_descendant_folder_ids(db, resource_folder.id))
+    else:
+        resource_file = db.query(File).filter(
+            File.id == resource_id,
+            File.is_deleted == False,
+        ).first()
+        if not resource_file:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        if not get_file_capabilities(db, resource_file, current_user).can_move:
+            raise HTTPException(status_code=403, detail="您没有移动此文件的权限")
+        if resource_file.folder_id is None:
+            raise HTTPException(status_code=400, detail="未归属目录的文件暂不支持移动")
+        source_folder = db.query(Folder).filter(
+            Folder.id == resource_file.folder_id,
+            Folder.is_deleted == False,
+        ).first()
+        if not source_folder:
+            raise HTTPException(status_code=409, detail="文件的原目录不存在")
+        current_parent_id = resource_file.folder_id
+
+    try:
+        root_folder_id = get_folder_root_id(db, source_folder)
+    except ResourceMoveError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    active_folders = db.query(Folder).filter(Folder.is_deleted == False).all()
+    same_root_folders: List[Folder] = []
+    for target in active_folders:
+        try:
+            if get_folder_root_id(db, target) == root_folder_id:
+                same_root_folders.append(target)
+        except ResourceMoveError:
+            continue
+
+    paths = build_folder_paths(db, same_root_folders)
+    targets: List[MoveTargetResponse] = []
+    for target in same_root_folders:
+        capabilities = get_folder_capabilities(db, target, current_user)
+        if not capabilities.can_view:
+            continue
+        disabled_reason: Optional[str] = None
+        if target.id == current_parent_id:
+            disabled_reason = "当前所在目录"
+        elif target.id in excluded_folder_ids:
+            disabled_reason = "不能移动到自身或子目录"
+        elif not capabilities.can_upload:
+            disabled_reason = "没有写入权限"
+        targets.append(
+            MoveTargetResponse(
+                id=target.id,
+                name=target.name,
+                parent_id=target.parent_id,
+                path=paths[target.id],
+                depth=max(0, paths[target.id].count(" / ")),
+                can_select=disabled_reason is None,
+                disabled_reason=disabled_reason,
+            )
+        )
+
+    targets.sort(key=lambda item: (item.path.casefold(), item.id))
+    return MoveTargetsResponse(root_folder_id=root_folder_id, targets=targets)
+
+
 @router.get("/{folder_id}/home-pinned-folders-context", response_model=HomeFolderContextResponse)
 def get_folder_home_pinned_context(
     folder_id: int,
@@ -1090,6 +1213,64 @@ def update_folder(folder_id: int, payload: FolderUpdate, db: Session = Depends(g
     db.commit()
     db.refresh(folder)
     return _serialize_folder(folder, db, current_user)
+
+
+@router.post("/{folder_id}/move", response_model=ResourceMoveResponse)
+def move_folder_endpoint(
+    folder_id: int,
+    payload: ResourceMoveRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    folder = db.query(Folder).filter(
+        Folder.id == folder_id,
+        Folder.is_deleted == False,
+    ).with_for_update().first()
+    target_folder = db.query(Folder).filter(
+        Folder.id == payload.target_folder_id,
+        Folder.is_deleted == False,
+    ).with_for_update().first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="文件夹不存在")
+    if not target_folder:
+        raise HTTPException(status_code=404, detail="目标文件夹不存在")
+    if not get_folder_capabilities(db, folder, current_user).can_move:
+        raise HTTPException(status_code=403, detail="您没有移动此文件夹的权限")
+    if not get_folder_capabilities(db, target_folder, current_user).can_upload:
+        raise HTTPException(status_code=403, detail="您没有向目标目录移动内容的权限")
+
+    try:
+        result = move_folder(db, folder, target_folder)
+        record_audit_log(
+            db,
+            current_user,
+            "folder.move",
+            "folder",
+            folder.id,
+            request=request,
+            detail={
+                "name": folder.name,
+                "old_parent_id": result.old_parent_id,
+                "target_folder_id": result.target_folder_id,
+                "target_path": result.target_path,
+            },
+        )
+        db.commit()
+    except ResourceMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    background_tasks.add_task(
+        refresh_folder_summaries_after_move,
+        result.old_parent_id,
+        result.target_folder_id,
+    )
+    return ResourceMoveResponse(**result.__dict__)
 
 @router.delete("/{folder_id}")
 def delete_folder(

@@ -45,6 +45,11 @@ from app.services.resource_access import (
 )
 from app.services.summary_index_service import generate_summary_and_index_task
 from app.services.folder_summary_service import folder_summary_service
+from app.services.resource_move_service import (
+    ResourceMoveError,
+    move_file,
+    refresh_folder_summaries_after_move,
+)
 from app.services.folder_ai_preset_service import folder_ai_preset_service
 from app.services.upload_folder_service import (
     ensure_upload_folder_parts,
@@ -759,6 +764,18 @@ class FileUpdateRequest(BaseModel):
     original_name: Optional[str] = None
 
 
+class FileMoveRequest(BaseModel):
+    target_folder_id: int
+
+
+class FileMoveResponse(BaseModel):
+    resource_type: str
+    resource_id: int
+    old_parent_id: int
+    target_folder_id: int
+    target_path: str
+
+
 def _serialize_file(file: File, db: Session, current_user: User) -> FileResponseModel:
     capabilities = get_file_capabilities(db, file, current_user)
     summary = db.query(DocumentSummary).filter(DocumentSummary.file_id == file.id).first()
@@ -1017,6 +1034,64 @@ def update_file(
         db.commit()
         db.refresh(file)
     return _serialize_file(file, db, current_user)
+
+
+@router.post("/{file_id}/move", response_model=FileMoveResponse)
+def move_file_endpoint(
+    file_id: int,
+    payload: FileMoveRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    file = db.query(File).filter(
+        File.id == file_id,
+        File.is_deleted == False,
+    ).with_for_update().first()
+    target_folder = db.query(Folder).filter(
+        Folder.id == payload.target_folder_id,
+        Folder.is_deleted == False,
+    ).with_for_update().first()
+    if not file:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    if not target_folder:
+        raise HTTPException(status_code=404, detail="目标文件夹不存在")
+    if not get_file_capabilities(db, file, current_user).can_move:
+        raise HTTPException(status_code=403, detail="您没有移动此文件的权限")
+    if not get_folder_capabilities(db, target_folder, current_user).can_upload:
+        raise HTTPException(status_code=403, detail="您没有向目标目录移动内容的权限")
+
+    try:
+        result = move_file(db, file, target_folder)
+        record_audit_log(
+            db,
+            current_user,
+            "file.move",
+            "file",
+            file.id,
+            request=request,
+            detail={
+                "name": file.original_name,
+                "old_parent_id": result.old_parent_id,
+                "target_folder_id": result.target_folder_id,
+                "target_path": result.target_path,
+            },
+        )
+        db.commit()
+    except ResourceMoveError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except Exception:
+        db.rollback()
+        raise
+
+    background_tasks.add_task(
+        refresh_folder_summaries_after_move,
+        result.old_parent_id,
+        result.target_folder_id,
+    )
+    return FileMoveResponse(**result.__dict__)
 
 
 @router.post("/upload", response_model=FileResponseModel)

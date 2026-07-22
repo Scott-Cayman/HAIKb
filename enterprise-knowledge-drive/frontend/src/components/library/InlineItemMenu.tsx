@@ -1,27 +1,31 @@
-import { MoreVertical, PencilLine, Trash2 } from 'lucide-react';
+import { FolderInput, MoreVertical, PencilLine, Trash2 } from 'lucide-react';
 
 type InlineItemMenuProps = {
   isOpen: boolean;
   canRename: boolean;
+  canMove: boolean;
   canDelete: boolean;
   onToggle: () => void;
   onRename: () => void;
+  onMove: () => void;
   onDelete: () => void;
 };
 
 const InlineItemMenu = ({
   isOpen,
   canRename,
+  canMove,
   canDelete,
   onToggle,
   onRename,
+  onMove,
   onDelete,
 }: InlineItemMenuProps) => {
-  const actionCount = Number(canRename) + Number(canDelete);
+  const actionCount = Number(canRename) + Number(canMove) + Number(canDelete);
   if (actionCount === 0) return null;
 
-  const expandedWidth = actionCount === 2 ? 'w-[92px]' : 'w-[60px]';
-  const triggerShift = actionCount === 2 ? '-translate-x-16' : '-translate-x-8';
+  const expandedWidth = actionCount === 3 ? 'w-[124px]' : actionCount === 2 ? 'w-[92px]' : 'w-[60px]';
+  const triggerShift = actionCount === 3 ? '-translate-x-24' : actionCount === 2 ? '-translate-x-16' : '-translate-x-8';
 
   return (
     <div
@@ -60,6 +64,19 @@ const InlineItemMenu = ({
             className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 transition-colors hover:bg-emerald-100 hover:text-emerald-700"
           >
             <PencilLine className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+        {canMove ? (
+          <button
+            type="button"
+            aria-label="移动到"
+            title="移动到"
+            aria-hidden={!isOpen}
+            tabIndex={isOpen ? 0 : -1}
+            onClick={onMove}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-blue-500 transition-colors hover:bg-blue-100 hover:text-blue-600"
+          >
+            <FolderInput className="h-3.5 w-3.5" />
           </button>
         ) : null}
         {canDelete ? (
